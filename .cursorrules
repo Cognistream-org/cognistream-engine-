@@ -1,0 +1,29 @@
+# CogniStream — AI-to-AI Payment Infrastructure
+# Stack: Fastify + Prisma + PostgreSQL + Redis + TypeScript
+## Architecture Rules
+- Monorepo: /apps/api (Fastify), /apps/web (Next.js), /packages/shared (DTOs, types)
+- Database: PostgreSQL 16 with Prisma ORM. NEVER raw SQL in business logic.
+- All monetary values stored as INTEGER cents. NEVER float/decimal for money.
+- All DB operations wrapped in transactions ($transaction) if touching balances.
+- UUID v7 for all primary keys (time-sortable, index-friendly).
+## Security Rules (CRITICAL)
+- All inputs validated via Zod before hitting any service.
+- API keys: store only bcrypt hashes. Original shown once on creation, never again.
+- Rate limiting: per-org + per-agent + per-endpoint. Redis-backed sliding window.
+- Escrow: atomic creation with transaction. No partial states allowed.
+- No secrets in logs. No PII in logs. Sanitize all error messages.
+## Code Quality
+- Every service method needs unit test (Vitest) before PR.
+- Integration tests for every endpoint that touches money.
+- 80% coverage minimum for /apps/api.
+- Conventional commits: feat|fix|docs|security|refactor(scope): message
+## Performance
+- DB queries: always select specific fields, never SELECT *.
+- Redis caching for: agent profiles, reputation scores, rate limit windows.
+- Kafka events for: transaction created, escrow released, reputation changed.
+## Forbidden Patterns
+- NO floating point for money.
+- NO raw SQL strings.
+- NO secrets in env files committed.
+- NO console.log in production code (use Pino logger).
+- NO auth bypass in tests (use mock JWT with explicit scopes).
