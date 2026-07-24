@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import type { OrganizationTier } from '@prisma/client';
+import type { OrganizationTier } from '@cognistream/shared';
 import { prisma } from '../lib/prisma.js';
 import { apiKeyCacheId, verifyApiKey } from '../lib/api-key.js';
 import { enforceRateLimit } from '../lib/rate-limit.js';

@@ -1,15 +1,30 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { OrganizationTier } from '@prisma/client';
+import type { OrganizationTier } from '@cognistream/shared';
 import type { Redis } from 'ioredis';
 import { errorBody } from './errors.js';
 
 const WINDOW_SECONDS = 60;
 
-export const TIER_LIMITS: Record<OrganizationTier, number> = {
+export const TIER_LIMITS = {
   free: 100,
   developer: 1000,
   enterprise: 10_000,
-};
+} as const satisfies Record<OrganizationTier, number>;
+
+function resolveTierLimit(tier: OrganizationTier): number {
+  switch (tier) {
+    case 'free':
+      return 100;
+    case 'developer':
+      return 1000;
+    case 'enterprise':
+      return 10_000;
+    default: {
+      const _exhaustive: never = tier;
+      return _exhaustive;
+    }
+  }
+}
 
 async function ensureRedis(redis: Redis): Promise<void> {
   if (redis.status !== 'ready') {
@@ -77,7 +92,7 @@ export async function enforceRateLimit(options: {
   reply: FastifyReply;
 }): Promise<boolean> {
   const { redis, orgId, tier, agentId, route, request, reply } = options;
-  const limit = TIER_LIMITS[tier];
+  const limit = resolveTierLimit(tier);
   const window = Math.floor(Date.now() / (WINDOW_SECONDS * 1000));
   const requestId = String(request.id);
 

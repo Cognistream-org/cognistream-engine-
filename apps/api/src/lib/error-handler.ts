@@ -6,6 +6,16 @@ function requestIdOf(request: FastifyRequest): string {
   return String(request.id);
 }
 
+function isPrismaKnownRequestError(
+  err: unknown,
+): err is Prisma.PrismaClientKnownRequestError {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    err instanceof Prisma.PrismaClientKnownRequestError
+  );
+}
+
 export function handleError(
   err: FastifyError | Error,
   request: FastifyRequest,
@@ -24,7 +34,7 @@ export function handleError(
     return;
   }
 
-  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+  if (isPrismaKnownRequestError(err)) {
     if (err.code === 'P2002') {
       void reply.status(409).send(errorBody('CONFLICT', 'Resource already exists', requestId));
       return;

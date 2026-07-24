@@ -38,6 +38,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @cognistream/shared build
+      - run: pnpm --filter @cognistream/api exec prisma generate
       - run: pnpm typecheck
 
   test:
