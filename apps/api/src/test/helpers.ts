@@ -18,6 +18,7 @@ export async function buildTestApp(): Promise<FastifyInstance> {
 export async function createTestOrgWithKey(options?: {
   scopes?: string[];
   tier?: 'free' | 'developer' | 'enterprise';
+  orgBalanceCents?: bigint;
 }): Promise<{
   org: { id: string; tier: string };
   apiKey: { id: string };
@@ -30,7 +31,7 @@ export async function createTestOrgWithKey(options?: {
       name: `Test Org ${id}`,
       slug: `test-${id.replace(/-/g, '')}`,
       tier: options?.tier ?? 'developer',
-      balanceCents: 10_000n,
+      balanceCents: options?.orgBalanceCents ?? 10_000n,
     },
   });
 
@@ -46,6 +47,7 @@ export async function createTestOrgWithKey(options?: {
       scopes: options?.scopes ?? [
         'read:agents',
         'write:agents',
+        'read:transactions',
         'write:transactions',
         'admin:keys',
       ],
@@ -53,6 +55,26 @@ export async function createTestOrgWithKey(options?: {
   });
 
   return { org, apiKey, plaintextKey: key };
+}
+
+export async function createTestAgent(
+  orgId: string,
+  options?: { balanceCents?: bigint; name?: string },
+): Promise<{ id: string; orgId: string; balanceCents: bigint }> {
+  const id = createId();
+  const agent = await prisma.agent.create({
+    data: {
+      id,
+      orgId,
+      name: options?.name ?? `agent-${id.slice(0, 8)}`,
+      publicKey: `pk_${id}`,
+      capabilities: ['chat'],
+      balanceCents: options?.balanceCents ?? 100_000n,
+      status: 'active',
+    },
+    select: { id: true, orgId: true, balanceCents: true },
+  });
+  return agent;
 }
 
 export async function cleanupOrg(orgId: string): Promise<void> {
@@ -63,6 +85,14 @@ export async function cleanupOrg(orgId: string): Promise<void> {
   const agentIds = agents.map((agent) => agent.id);
 
   if (agentIds.length > 0) {
+    await prisma.dispute.deleteMany({
+      where: {
+        OR: [
+          { raisedById: { in: agentIds } },
+          { transaction: { OR: [{ buyerId: { in: agentIds } }, { sellerId: { in: agentIds } }] } },
+        ],
+      },
+    });
     await prisma.reputationEvent.deleteMany({
       where: { agentId: { in: agentIds } },
     });
@@ -73,6 +103,8 @@ export async function cleanupOrg(orgId: string): Promise<void> {
     });
   }
 
+  await prisma.auditLog.deleteMany({ where: { orgId } });
+  await prisma.webhook.deleteMany({ where: { orgId } });
   await prisma.agent.deleteMany({ where: { orgId } });
   await prisma.apiKey.deleteMany({ where: { orgId } });
   await prisma.organization.deleteMany({ where: { id: orgId } });

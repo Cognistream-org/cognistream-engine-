@@ -8,7 +8,11 @@ const prisma = new PrismaClient();
 async function main(): Promise<void> {
   // Clean dependent tables for a deterministic seed
   await prisma.reputationEvent.deleteMany();
+  await prisma.dispute.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.escrow.deleteMany();
   await prisma.transaction.deleteMany();
+  await prisma.webhook.deleteMany();
   await prisma.agent.deleteMany();
   await prisma.apiKey.deleteMany();
   await prisma.organization.deleteMany();
@@ -48,6 +52,7 @@ async function main(): Promise<void> {
           capabilities: i === 1 ? ['chat', 'search'] : i === 2 ? ['codegen'] : ['embeddings'],
           pricingModel: 'per_request',
           unitPriceCents: BigInt(100 * i),
+          balanceCents: BigInt(100_000 * i),
           reputationScore: 0.5 + i * 0.05,
           status: 'active',
         },
@@ -65,7 +70,7 @@ async function main(): Promise<void> {
         name: `${org.slug}-root`,
         keyPrefix,
         keyHash,
-        scopes: ['read:agents', 'write:agents', 'write:transactions', 'admin:keys'],
+        scopes: ['read:agents', 'write:agents', 'read:transactions', 'write:transactions', 'admin:keys'],
       },
     });
 
@@ -101,17 +106,28 @@ async function main(): Promise<void> {
   }
 
   for (const [index, pair] of pairs.entries()) {
+    const txId = uuidv7();
+    const status = index % 2 === 0 ? 'settled' : 'escrowed';
     await prisma.transaction.create({
       data: {
-        id: uuidv7(),
+        id: txId,
         buyerId: pair.buyerId,
         sellerId: pair.sellerId,
         amountCents: pair.amount,
         feeCents: pair.fee,
         description: `Seed transaction ${index + 1}`,
         metadata: { seed: true, index },
-        status: index % 2 === 0 ? 'settled' : 'pending',
-        settledAt: index % 2 === 0 ? new Date() : null,
+        status,
+        settledAt: status === 'settled' ? new Date() : null,
+        escrow: {
+          create: {
+            id: uuidv7(),
+            amountCents: pair.amount,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            released: status === 'settled',
+            releasedAt: status === 'settled' ? new Date() : null,
+          },
+        },
       },
     });
   }

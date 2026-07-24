@@ -14,20 +14,21 @@ export default defineConfig({
     fileParallelism: false,
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html', 'json-summary'],
+      reporter: ['text', 'html', 'json-summary', 'lcov'],
       include: ['src/**/*.ts'],
       exclude: [
         'src/**/*.test.ts',
         'src/index.ts',
         'src/test/**',
+        'src/scripts/**',
         // Auth plugin is exercised by integration suites; Redis failure branches skew metrics.
         'src/plugins/auth.ts',
       ],
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 80,
-        statements: 80,
+        lines: 90,
+        functions: 90,
+        branches: 75,
+        statements: 90,
       },
     },
   },

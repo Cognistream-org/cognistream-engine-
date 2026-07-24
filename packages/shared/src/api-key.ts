@@ -3,14 +3,19 @@ import { z } from 'zod';
 export const ApiKeyScopeSchema = z.enum([
   'read:agents',
   'write:agents',
+  'read:transactions',
   'write:transactions',
   'admin:keys',
+  'admin:disputes',
 ]);
 export type ApiKeyScope = z.infer<typeof ApiKeyScopeSchema>;
 
 export const CreateApiKeySchema = z.object({
   name: z.string().min(1).max(128),
-  scopes: z.array(ApiKeyScopeSchema).min(1).default(['read:agents', 'write:transactions']),
+  scopes: z
+    .array(ApiKeyScopeSchema)
+    .min(1)
+    .default(['read:agents', 'read:transactions', 'write:transactions']),
   expiresInDays: z.number().int().positive().max(3650).optional(),
 });
 export type CreateApiKeyInput = z.infer<typeof CreateApiKeySchema>;

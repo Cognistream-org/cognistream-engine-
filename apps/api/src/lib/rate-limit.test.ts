@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Redis } from 'ioredis';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { enforceRateLimit, TIER_LIMITS } from './rate-limit.js';
+import {
+  enforceRateLimit,
+  enforceTransactionCreateLimit,
+  TIER_LIMITS,
+  TRANSACTION_CREATE_LIMIT_PER_MINUTE,
+} from './rate-limit.js';
 
 function mockRedis(overrides: Partial<Redis> = {}): Redis {
   return {
@@ -96,6 +101,36 @@ describe('enforceRateLimit', () => {
       apiKeyId: 'key',
       tier: 'free',
       route: 'GET:/v1/agents',
+      request,
+      reply,
+    });
+    expect(ok).toBe(false);
+    expect(reply.status).toHaveBeenCalledWith(429);
+  });
+});
+
+describe('enforceTransactionCreateLimit', () => {
+  it('allows under 10 creates per minute', async () => {
+    const redis = mockRedis({ incr: vi.fn(async () => 3) } as Partial<Redis>);
+    const { request, reply } = mockReqReply();
+    const ok = await enforceTransactionCreateLimit({
+      redis,
+      orgId: 'org',
+      request,
+      reply,
+    });
+    expect(ok).toBe(true);
+    expect(TRANSACTION_CREATE_LIMIT_PER_MINUTE).toBeGreaterThanOrEqual(10);
+  });
+
+  it('rejects above create limit', async () => {
+    const redis = mockRedis({
+      incr: vi.fn(async () => TRANSACTION_CREATE_LIMIT_PER_MINUTE + 1),
+    } as Partial<Redis>);
+    const { request, reply } = mockReqReply();
+    const ok = await enforceTransactionCreateLimit({
+      redis,
+      orgId: 'org',
       request,
       reply,
     });
