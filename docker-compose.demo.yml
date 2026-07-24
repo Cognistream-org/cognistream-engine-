@@ -1,0 +1,98 @@
+# CogniStream demo stack — one command:
+#   docker compose -f docker-compose.demo.yml up --build
+#
+# Exposes: Web :3000 | API :3001 | Docs :3002
+# Pre-seeded with 3 orgs, 10 agents, 20 transactions, 2 disputes.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cognistream
+      POSTGRES_PASSWORD: cognistream_demo
+      POSTGRES_DB: cognistream
+    volumes:
+      - demo_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cognistream -d cognistream']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - demo_redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.demo
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      DATABASE_URL: postgresql://cognistream:cognistream_demo@postgres:5432/cognistream?schema=public
+      REDIS_URL: redis://redis:6379
+      SEED_MODE: demo
+      JWT_SECRET: demo-jwt-secret-change-me-in-prod-32chars
+      COOKIE_SECRET: demo-cookie-secret-change-me-32chars
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/health']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/']
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  docs:
+    build:
+      context: .
+      dockerfile: apps/docs/Dockerfile
+    ports:
+      - '3002:3002'
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3002/']
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+volumes:
+  demo_postgres:
+  demo_redis:

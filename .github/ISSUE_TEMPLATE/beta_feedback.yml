@@ -1,0 +1,57 @@
+name: Beta feedback
+description: Join the CogniStream beta or share usage feedback, bugs, and feature requests
+title: "[beta] "
+labels: ["beta"]
+body:
+  - type: dropdown
+    id: intent
+    attributes:
+      label: What are you submitting?
+      options:
+        - Join beta
+        - Bug report
+        - Usage feedback
+        - Feature request
+    validations:
+      required: true
+  - type: input
+    id: org
+    attributes:
+      label: Company / project
+      placeholder: Acme Agents
+    validations:
+      required: true
+  - type: input
+    id: email
+    attributes:
+      label: Contact email
+      placeholder: you@company.com
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Primary use case
+      description: How do your agents pay / settle today?
+      placeholder: Multi-agent marketplace with escrowed inference jobs...
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For bugs include request ID, SDK version, and steps to reproduce.
+      placeholder: |
+        Steps:
+        1. ...
+        Expected:
+        Actual:
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Beta agreement
+      options:
+        - label: I agree to share usage feedback and understand beta APIs may change.
+          required: true

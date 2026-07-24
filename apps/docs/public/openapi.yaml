@@ -1,0 +1,731 @@
+openapi: 3.1.0
+info:
+  title: CogniStream API
+  version: 1.0.0
+  description: AI-to-AI payment infrastructure with escrow, reputation, and disputes.
+  contact:
+    name: CogniStream
+    url: https://github.com/Cognistream-org/cognistream-engine-
+
+servers:
+  - url: https://api.cognistream.io
+    description: Production
+  - url: http://localhost:3001
+    description: Local development
+
+tags:
+  - name: Health
+  - name: Agents
+  - name: API Keys
+  - name: Transactions
+  - name: Disputes
+  - name: Overview
+  - name: Realtime
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  path:
+                    type: string
+                  message:
+                    type: string
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        totalPages:
+          type: integer
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+        walletAddress:
+          type: string
+        reputationScore:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateAgentRequest:
+      type: object
+      required: [name, slug, walletAddress]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        walletAddress:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ApiKeyMetadata:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        keyPrefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateApiKeyRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+
+    CreatedApiKey:
+      allOf:
+        - $ref: '#/components/schemas/ApiKeyMetadata'
+        - type: object
+          properties:
+            key:
+              type: string
+              description: Plaintext key — shown once only
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        amountCents:
+          type: string
+        buyerAgentId:
+          type: string
+        sellerAgentId:
+          type: string
+        description:
+          type: string
+        escrowStatus:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateTransactionRequest:
+      type: object
+      required: [sellerAgentId, amountCents]
+      properties:
+        sellerAgentId:
+          type: string
+          format: uuid
+        amountCents:
+          type: integer
+          minimum: 1
+        description:
+          type: string
+        idempotencyKey:
+          type: string
+          maxLength: 64
+
+    ReleaseEscrowRequest:
+      type: object
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        review:
+          type: string
+
+    Dispute:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transactionId:
+          type: string
+        status:
+          type: string
+          enum: [open, resolved]
+        reason:
+          type: string
+        resolution:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateDisputeRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+
+    ResolveDisputeRequest:
+      type: object
+      required: [resolution]
+      properties:
+        resolution:
+          type: string
+          enum: [refund_buyer, release_seller]
+        notes:
+          type: string
+
+    HealthCheck:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, error]
+        timestamp:
+          type: string
+          format: date-time
+        services:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [up, down]
+            redis:
+              type: string
+              enum: [up, down]
+
+    OverviewResponse:
+      type: object
+      properties:
+        organization:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            slug:
+              type: string
+            tier:
+              type: string
+            balanceCents:
+              type: string
+        stats:
+          type: object
+          properties:
+            transactionsThisMonth:
+              type: integer
+            volumeCentsThisMonth:
+              type: string
+            activeAgents:
+              type: integer
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: All services healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheck'
+        '503':
+          description: Degraded or error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheck'
+
+  /v1/agents:
+    post:
+      tags: [Agents]
+      summary: Create agent
+      operationId: createAgent
+      x-scopes: [write:agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '409':
+          description: Slug conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags: [Agents]
+      summary: List agents
+      operationId: listAgents
+      x-scopes: [read:agents]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive]
+      responses:
+        '200':
+          description: Paginated agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agent'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /v1/agents/{id}:
+    get:
+      tags: [Agents]
+      summary: Get agent
+      operationId: getAgent
+      x-scopes: [read:agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Agent with reputation
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Agent'
+                  - type: object
+                    properties:
+                      reputation:
+                        type: object
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/agents/{id}/activate:
+    post:
+      tags: [Agents]
+      summary: Activate agent
+      operationId: activateAgent
+      x-scopes: [write:agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+
+  /v1/agents/{id}/deactivate:
+    post:
+      tags: [Agents]
+      summary: Deactivate agent
+      operationId: deactivateAgent
+      x-scopes: [write:agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+
+  /v1/api-keys:
+    post:
+      tags: [API Keys]
+      summary: Create API key
+      operationId: createApiKey
+      x-scopes: [admin:keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '201':
+          description: Created with plaintext key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedApiKey'
+    get:
+      tags: [API Keys]
+      summary: List API keys
+      operationId: listApiKeys
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Paginated keys (metadata only)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKeyMetadata'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /v1/api-keys/{id}:
+    delete:
+      tags: [API Keys]
+      summary: Revoke API key
+      operationId: revokeApiKey
+      x-scopes: [admin:keys]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyMetadata'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/transactions:
+    post:
+      tags: [Transactions]
+      summary: Create transaction
+      operationId: createTransaction
+      x-scopes: [write:transactions]
+      parameters:
+        - name: X-Agent-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransactionRequest'
+      responses:
+        '201':
+          description: Created
+        '200':
+          description: Idempotent duplicate
+        '402':
+          description: Insufficient balance
+        '429':
+          description: Rate limited
+    get:
+      tags: [Transactions]
+      summary: List transactions
+      operationId: listTransactions
+      x-scopes: [read:transactions]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated transactions
+
+  /v1/transactions/{id}:
+    get:
+      tags: [Transactions]
+      summary: Get transaction
+      operationId: getTransaction
+      x-scopes: [read:transactions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transaction
+        '404':
+          description: Not found
+
+  /v1/transactions/{id}/release:
+    post:
+      tags: [Transactions]
+      summary: Release escrow
+      operationId: releaseEscrow
+      x-scopes: [write:transactions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseEscrowRequest'
+      responses:
+        '200':
+          description: Released
+        '409':
+          description: Invalid state
+
+  /v1/transactions/{id}/dispute:
+    post:
+      tags: [Transactions, Disputes]
+      summary: Open dispute
+      operationId: createDispute
+      x-scopes: [write:transactions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Agent-Id
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDisputeRequest'
+      responses:
+        '201':
+          description: Dispute opened
+
+  /v1/disputes:
+    get:
+      tags: [Disputes]
+      summary: List disputes
+      operationId: listDisputes
+      x-scopes: [read:transactions]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated disputes
+
+  /v1/disputes/{id}:
+    get:
+      tags: [Disputes]
+      summary: Get dispute
+      operationId: getDispute
+      x-scopes: [read:transactions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Dispute with transaction
+
+  /v1/disputes/{id}/resolve:
+    post:
+      tags: [Disputes]
+      summary: Resolve dispute
+      operationId: resolveDispute
+      x-scopes: [admin:disputes]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveDisputeRequest'
+      responses:
+        '200':
+          description: Resolved
+
+  /v1/overview:
+    get:
+      tags: [Overview]
+      summary: Organization overview
+      operationId: getOverview
+      x-scopes: [read:transactions]
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverviewResponse'
+
+  /v1/stream:
+    get:
+      tags: [Realtime]
+      summary: WebSocket event stream
+      description: Upgrade to WebSocket. Authenticate with api_key query parameter.
+      security: []
+      parameters:
+        - name: api_key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching Protocols

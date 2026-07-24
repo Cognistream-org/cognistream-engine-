@@ -9,10 +9,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @cognistream/api --filter @cognistream/web run dev",
+    "dev": "pnpm -r --parallel --filter @cognistream/api --filter @cognistream/web --filter @cognistream/docs run dev",
+    "dev:docs": "pnpm --filter @cognistream/docs dev",
     "dev:api": "pnpm --filter @cognistream/api dev",
     "dev:web": "pnpm --filter @cognistream/web dev",
-    "build": "pnpm --filter @cognistream/shared build && pnpm --filter @cognistream/api build && pnpm --filter @cognistream/web build",
+    "build": "pnpm --filter @cognistream/shared build && pnpm --filter @cognistream/sdk build && pnpm --filter @cognistream/api build && pnpm --filter @cognistream/web build && pnpm --filter @cognistream/docs build",
+    "build:docs": "pnpm --filter @cognistream/docs build",
+    "build:sdk": "pnpm --filter @cognistream/sdk build",
     "lint": "pnpm -r run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -20,9 +23,11 @@
     "db:generate": "pnpm --filter @cognistream/api db:generate",
     "db:migrate": "pnpm --filter @cognistream/api db:migrate",
     "db:seed": "pnpm --filter @cognistream/api db:seed",
+    "db:seed:demo": "pnpm --filter @cognistream/api db:seed:demo",
     "db:studio": "pnpm --filter @cognistream/api db:studio",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
+    "docker:demo": "docker compose -f docker-compose.demo.yml up --build",
     "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {
@@ -37,7 +42,9 @@
     "overrides": {
       "sharp": ">=0.35.0",
       "postcss": ">=8.5.12",
-      "vite": ">=6.3.5"
+      "vite": ">=6.3.5",
+      "brace-expansion": ">=5.0.8",
+      "minimatch": ">=10.2.5"
     }
   }
 }
