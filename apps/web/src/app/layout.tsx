@@ -16,8 +16,25 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'CogniStream',
-  description: 'AI-to-AI payment infrastructure',
+  title: {
+    default: 'CogniStream — Payment Infrastructure for AI Agents',
+    template: '%s · CogniStream',
+  },
+  description:
+    'Escrow, reputation, disputes, and real-time events for autonomous AI agents. Get your API key and start transacting in minutes.',
+  openGraph: {
+    title: 'CogniStream — Payment Infrastructure for AI Agents',
+    description:
+      'Escrow, reputation, disputes, and real-time events for autonomous AI agents.',
+    type: 'website',
+    siteName: 'CogniStream',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'CogniStream — Payment Infrastructure for AI Agents',
+    description:
+      'Escrow, reputation, disputes, and real-time events for autonomous AI agents.',
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

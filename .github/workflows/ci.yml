@@ -85,10 +85,11 @@ jobs:
       - run: pnpm --filter @cognistream/api exec prisma migrate deploy
       - run: pnpm --filter @cognistream/api exec prisma generate
       - run: pnpm --filter @cognistream/api test
+      - run: pnpm --filter @cognistream/sdk test
       - run: pnpm --filter @cognistream/web test
       - uses: codecov/codecov-action@v4
         with:
-          files: ./apps/api/coverage/lcov.info
+          files: ./apps/api/coverage/lcov.info,./packages/sdk/coverage/coverage-final.json
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 

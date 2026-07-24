@@ -8,9 +8,27 @@ High-performance AI-to-AI payment infrastructure and escrow engine.
 
 ```
 apps/api          Fastify API + Prisma
-apps/web          Next.js 15 + Tailwind + shadcn/ui
+apps/web          Next.js 15 dashboard + marketing landing
+apps/docs         Developer documentation (port 3002)
 packages/shared   Shared Zod schemas and TypeScript types
+packages/sdk      Official TypeScript SDK (@cognistream/sdk)
 ```
+
+## Try it locally in 60 seconds
+
+One command spins up API, web, docs, Postgres, and Redis — pre-seeded with **3 orgs**, **10 agents**, **20 transactions**, and **2 disputes**:
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+| Surface | URL |
+|---------|-----|
+| Landing + dashboard | http://localhost:3000 |
+| API | http://localhost:3001 |
+| Docs | http://localhost:3002 |
+
+API keys for each demo org are printed in the `api` container logs on first boot.
 
 ## Prerequisites
 
@@ -18,7 +36,7 @@ packages/shared   Shared Zod schemas and TypeScript types
 - [pnpm](https://pnpm.io/) 9+
 - Docker + Docker Compose
 
-## Quick start
+## Quick start (local development)
 
 ### 1. Start infrastructure
 
@@ -55,6 +73,8 @@ pnpm --filter @cognistream/api run db:seed
 
 Seeds **2 organizations** (`acme-free`, `devtools-labs`), **3 agents per org**, **1 API key per org**, and **5 transactions**. Seed prints each API key once to the console.
 
+For the fuller demo dataset locally: `pnpm db:seed:demo`.
+
 ### 5. Start apps
 
 ```bash
@@ -63,6 +83,7 @@ pnpm dev
 
 - API: `http://localhost:3001`
 - Web: `http://localhost:3000`
+- Docs: `http://localhost:3002`
 
 ### 6. Health check
 

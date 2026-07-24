@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 215 25% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 12%;
+    --primary: 172 66% 32%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 18% 93%;
+    --secondary-foreground: 215 25% 20%;
+    --muted: 210 16% 94%;
+    --muted-foreground: 215 14% 42%;
+    --accent: 172 45% 92%;
+    --accent-foreground: 172 66% 22%;
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    --ring: 172 66% 32%;
+    --teal: 172 66% 32%;
+    --teal-foreground: 0 0% 100%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 215 28% 8%;
+    --foreground: 210 20% 96%;
+    --card: 215 25% 11%;
+    --card-foreground: 210 20% 96%;
+    --primary: 172 55% 42%;
+    --primary-foreground: 215 28% 8%;
+    --secondary: 215 22% 16%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 215 22% 16%;
+    --muted-foreground: 215 14% 58%;
+    --accent: 172 35% 16%;
+    --accent-foreground: 172 55% 72%;
+    --border: 215 20% 20%;
+    --input: 215 20% 20%;
+    --ring: 172 55% 42%;
+    --teal: 172 55% 42%;
+    --teal-foreground: 215 28% 8%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer components {
+  .prose-docs h1 {
+    @apply text-3xl font-semibold tracking-tight mb-4;
+  }
+
+  .prose-docs h2 {
+    @apply text-xl font-semibold mt-10 mb-3;
+  }
+
+  .prose-docs h3 {
+    @apply text-lg font-medium mt-6 mb-2;
+  }
+
+  .prose-docs p {
+    @apply text-muted-foreground leading-7 mb-4;
+  }
+
+  .prose-docs ul {
+    @apply list-disc pl-6 space-y-2 text-muted-foreground mb-4;
+  }
+
+  .prose-docs ol {
+    @apply list-decimal pl-6 space-y-2 text-muted-foreground mb-4;
+  }
+
+  .prose-docs a {
+    @apply text-primary hover:underline;
+  }
+
+  .prose-docs code:not(pre code) {
+    @apply rounded bg-muted px-1.5 py-0.5 text-sm font-mono text-foreground;
+  }
+}
