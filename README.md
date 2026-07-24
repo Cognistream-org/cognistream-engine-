@@ -26,18 +26,10 @@ packages/shared   Shared Zod schemas and TypeScript types
 docker compose up -d
 ```
 
-This starts:
-
-| Service    | Image            | Port |
-|------------|------------------|------|
+| Service    | Image                | Port |
+|------------|----------------------|------|
 | PostgreSQL | `postgres:16-alpine` | `5432` |
 | Redis      | `redis:7-alpine`     | `6379` |
-
-Check status:
-
-```bash
-docker compose ps
-```
 
 ### 2. Install dependencies
 
@@ -58,24 +50,19 @@ cp .env.example apps/web/.env.local
 ```bash
 pnpm db:generate
 pnpm --filter @cognistream/api exec prisma migrate deploy
-pnpm db:seed
+pnpm --filter @cognistream/api run db:seed
 ```
 
-Seeds three organizations: `acme-free`, `devtools-labs`, `enterprise-corp`.
+Seeds **2 organizations** (`acme-free`, `devtools-labs`), **3 agents per org**, **1 API key per org**, and **5 transactions**. Seed prints each API key once to the console.
 
 ### 5. Start apps
 
 ```bash
-# API on :3001 and web on :3000
 pnpm dev
 ```
 
-Or separately:
-
-```bash
-pnpm dev:api
-pnpm dev:web
-```
+- API: `http://localhost:3001`
+- Web: `http://localhost:3000`
 
 ### 6. Health check
 
@@ -83,17 +70,89 @@ pnpm dev:web
 curl http://localhost:3001/health
 ```
 
-Example response:
-
 ```json
 {
   "status": "ok",
   "timestamp": "2026-01-01T00:00:00.000Z",
-  "services": {
-    "database": "up",
-    "redis": "up"
-  }
+  "services": { "database": "up", "redis": "up" }
 }
+```
+
+## API examples
+
+All `/v1` routes require `X-API-Key`.
+
+### Create agent
+
+```bash
+curl -X POST http://localhost:3001/v1/agents \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: cs_live_..." \
+  -d '{"name":"Alpha","publicKey":"pk_alpha","capabilities":["chat"]}'
+```
+
+```json
+{
+  "id": "...",
+  "orgId": "...",
+  "name": "Alpha",
+  "publicKey": "pk_alpha",
+  "capabilities": ["chat"],
+  "reputationScore": "0.5000",
+  "status": "active"
+}
+```
+
+### List agents
+
+```bash
+curl "http://localhost:3001/v1/agents?capability=chat&page=1&limit=20" \
+  -H "X-API-Key: cs_live_..."
+```
+
+```json
+{
+  "data": [{ "id": "...", "name": "Alpha", "status": "active" }],
+  "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+### Create API key (plaintext shown once)
+
+```bash
+curl -X POST http://localhost:3001/v1/api-keys \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: cs_live_..." \
+  -d '{"name":"ci","scopes":["read:agents","admin:keys"]}'
+```
+
+```json
+{
+  "id": "...",
+  "name": "ci",
+  "key": "cs_live_...",
+  "scopes": ["read:agents", "admin:keys"]
+}
+```
+
+### List API keys (metadata only)
+
+```bash
+curl "http://localhost:3001/v1/api-keys?page=1&limit=20" \
+  -H "X-API-Key: cs_live_..."
+```
+
+```json
+{
+  "data": [{ "id": "...", "name": "ci", "scopes": ["read:agents"], "revokedAt": null }],
+  "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+Error envelope:
+
+```json
+{ "error": { "code": "UNAUTHORIZED", "message": "Missing or invalid API key", "requestId": "..." } }
 ```
 
 ## Scripts
@@ -104,10 +163,9 @@ Example response:
 | `pnpm docker:down` | Stop containers |
 | `pnpm db:generate` | Generate Prisma client |
 | `pnpm db:migrate` | Apply migrations |
-| `pnpm db:seed` | Seed organizations |
-| `pnpm test` | Run Vitest across packages |
+| `pnpm db:seed` | Seed organizations / agents / keys |
+| `pnpm test` | Vitest (API includes coverage) |
 | `pnpm lint` | ESLint |
-| `pnpm format` | Prettier write |
 | `pnpm typecheck` | TypeScript check |
 
 ## Money & data rules

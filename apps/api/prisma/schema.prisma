@@ -13,15 +13,109 @@ enum OrganizationTier {
   enterprise
 }
 
+enum AgentStatus {
+  active
+  inactive
+  suspended
+}
+
+enum TransactionStatus {
+  pending
+  escrowed
+  settled
+  disputed
+  refunded
+}
+
 /// Monetary balances are stored as INTEGER cents (BigInt). Never use float/decimal for money.
 model Organization {
-  id           String            @id @db.Uuid
-  name         String            @db.VarChar(128)
-  slug         String            @unique @db.VarChar(64)
-  tier         OrganizationTier  @default(free)
-  balanceCents BigInt            @default(0) @map("balance_cents")
-  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id           String           @id @db.Uuid
+  name         String           @db.VarChar(128)
+  slug         String           @unique @db.VarChar(64)
+  tier         OrganizationTier @default(free)
+  balanceCents BigInt           @default(0) @map("balance_cents")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  agents  Agent[]
+  apiKeys ApiKey[]
 
   @@map("organizations")
+}
+
+model Agent {
+  id              String      @id @db.Uuid
+  orgId           String      @map("org_id") @db.Uuid
+  name            String      @db.VarChar(128)
+  publicKey       String      @unique @map("public_key") @db.Text
+  capabilities    String[]    @default([]) @map("capabilities")
+  pricingModel    String?     @map("pricing_model") @db.VarChar(32)
+  unitPriceCents  BigInt?     @map("unit_price_cents")
+  reputationScore Decimal     @default(0.5) @map("reputation_score") @db.Decimal(5, 4)
+  status          AgentStatus @default(active)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org                   Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transactionsAsBuyer   Transaction[]    @relation("BuyerTransactions")
+  transactionsAsSeller  Transaction[]    @relation("SellerTransactions")
+  reputationEvents      ReputationEvent[]
+
+  @@index([orgId, status])
+  @@index([reputationScore])
+  @@map("agents")
+}
+
+model ApiKey {
+  id         String    @id @db.Uuid
+  orgId      String    @map("org_id") @db.Uuid
+  name       String    @db.VarChar(128)
+  keyPrefix  String    @map("key_prefix") @db.VarChar(16)
+  keyHash    String    @map("key_hash") @db.VarChar(255)
+  scopes     String[]  @default(["read:agents", "write:transactions"])
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt  DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([keyPrefix])
+  @@map("api_keys")
+}
+
+model Transaction {
+  id          String            @id @db.Uuid
+  buyerId     String            @map("buyer_id") @db.Uuid
+  sellerId    String            @map("seller_id") @db.Uuid
+  amountCents BigInt            @map("amount_cents")
+  feeCents    BigInt            @map("fee_cents")
+  description String?           @db.VarChar(512)
+  metadata    Json?             @default("{}")
+  status      TransactionStatus @default(pending)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  settledAt   DateTime?         @map("settled_at") @db.Timestamptz(3)
+
+  buyer  Agent @relation("BuyerTransactions", fields: [buyerId], references: [id])
+  seller Agent @relation("SellerTransactions", fields: [sellerId], references: [id])
+
+  @@index([buyerId, createdAt])
+  @@index([sellerId, status])
+  @@index([status, createdAt])
+  @@map("transactions")
+}
+
+model ReputationEvent {
+  id        String   @id @db.Uuid
+  agentId   String   @map("agent_id") @db.Uuid
+  eventType String   @map("event_type") @db.VarChar(32)
+  delta     Decimal  @db.Decimal(5, 4)
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, createdAt])
+  @@map("reputation_events")
 }
