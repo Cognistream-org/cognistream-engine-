@@ -153,44 +153,26 @@ jobs:
         run: pnpm --filter @cognistream/api build
       - name: Build web app
         run: pnpm --filter @cognistream/web build
-      - name: Start stack and run E2E tests
+      - name: Start API server
+        run: nohup pnpm --filter @cognistream/api start > /tmp/api.log 2>&1 &
+      - name: Wait for API
+        run: npx wait-on http://localhost:3001/health --timeout 60000
+      - name: Start web server
+        run: nohup pnpm --filter @cognistream/web start > /tmp/web.log 2>&1 &
+      - name: Wait for web
+        run: npx wait-on http://localhost:3000 --timeout 60000
+      - name: Run E2E tests
         run: |
-          set -e
-          pnpm --filter @cognistream/api start &
-          API_PID=$!
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:3001/health >/dev/null; then
-              echo "API ready"
-              break
-            fi
-            if [ "$i" -eq 60 ]; then
-              echo "API failed to become ready"
-              kill $API_PID || true
-              exit 1
-            fi
-            sleep 1
-          done
-
-          pnpm --filter @cognistream/web start &
-          WEB_PID=$!
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:3000 >/dev/null; then
-              echo "Web ready"
-              break
-            fi
-            if [ "$i" -eq 60 ]; then
-              echo "Web failed to become ready"
-              kill $API_PID $WEB_PID || true
-              exit 1
-            fi
-            sleep 1
-          done
-
-          set +e
+          # Re-confirm stack is still up (nohup across steps on GHA)
+          npx wait-on http://localhost:3001/health --timeout 15000
+          npx wait-on http://localhost:3000 --timeout 15000
           pnpm --filter @cognistream/web test:e2e
-          STATUS=$?
-          kill $API_PID $WEB_PID || true
-          exit $STATUS
+      - name: Print API logs on failure
+        if: failure()
+        run: cat /tmp/api.log || true
+      - name: Print web logs on failure
+        if: failure()
+        run: cat /tmp/web.log || true
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: failure()
