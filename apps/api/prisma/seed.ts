@@ -78,6 +78,29 @@ async function main(): Promise<void> {
     console.log(`API key for ${org.slug}: ${key}`);
   }
 
+  const e2eKey = process.env.E2E_API_KEY?.trim();
+  if (e2eKey && e2eKey.length >= 16) {
+    const keyHash = await hashApiKey(e2eKey);
+    await prisma.apiKey.create({
+      data: {
+        id: uuidv7(),
+        orgId: freeOrg.id,
+        name: 'e2e-ci-root',
+        keyPrefix: e2eKey.slice(0, 16),
+        keyHash,
+        scopes: [
+          'read:agents',
+          'write:agents',
+          'read:transactions',
+          'write:transactions',
+          'admin:keys',
+        ],
+      },
+    });
+    // eslint-disable-next-line no-console -- seed script feedback
+    console.log(`E2E API key seeded for acme-free (prefix ${e2eKey.slice(0, 16)})`);
+  }
+
   const freeAgents = agentsByOrg[freeOrg.id] ?? [];
   const devAgents = agentsByOrg[devOrg.id] ?? [];
 

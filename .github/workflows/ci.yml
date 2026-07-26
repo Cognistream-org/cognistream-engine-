@@ -89,9 +89,115 @@ jobs:
       - run: pnpm --filter @cognistream/web test
       - uses: codecov/codecov-action@v4
         with:
-          files: ./apps/api/coverage/lcov.info,./packages/sdk/coverage/coverage-final.json
+          files: >
+            ./apps/api/coverage/lcov.info,
+            ./packages/sdk/coverage/lcov.info,
+            ./apps/web/coverage/lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: cognistream_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d cognistream_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/cognistream_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+      LOG_LEVEL: silent
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      E2E_API_KEY: cs_demo_e2e_key_000000000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @cognistream/shared build
+      - run: pnpm --filter @cognistream/api exec prisma migrate deploy
+      - run: pnpm --filter @cognistream/api exec prisma generate
+      - name: Seed test database
+        run: pnpm --filter @cognistream/api exec tsx prisma/seed.ts
+      - name: Install Playwright browsers
+        run: pnpm --filter @cognistream/web exec playwright install --with-deps chromium
+      - name: Build API
+        run: pnpm --filter @cognistream/api build
+      - name: Build web app
+        run: pnpm --filter @cognistream/web build
+      - name: Start stack and run E2E tests
+        run: |
+          set -e
+          pnpm --filter @cognistream/api start &
+          API_PID=$!
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3001/health >/dev/null; then
+              echo "API ready"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "API failed to become ready"
+              kill $API_PID || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          pnpm --filter @cognistream/web start &
+          WEB_PID=$!
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000 >/dev/null; then
+              echo "Web ready"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "Web failed to become ready"
+              kill $API_PID $WEB_PID || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          set +e
+          pnpm --filter @cognistream/web test:e2e
+          STATUS=$?
+          kill $API_PID $WEB_PID || true
+          exit $STATUS
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7
 
   audit:
     runs-on: ubuntu-latest

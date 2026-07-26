@@ -21,5 +21,7 @@ export function AgentStatusBadge({ status }: { status: AgentStatus }) {
 export function reputationToPercent(score: string): number {
   const n = Number(score);
   if (!Number.isFinite(n)) return 0;
-  return Math.min(100, Math.max(0, n));
+  // Canonical reputation is 0–1; Progress expects 0–100. Values > 1 are treated as already percent.
+  const pct = n <= 1 ? n * 100 : n;
+  return Math.min(100, Math.max(0, Math.round(pct)));
 }
