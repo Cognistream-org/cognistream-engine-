@@ -1,0 +1,4 @@
+# Web app local ignores
+/test-results/
+/playwright-report/
+/playwright/.cache/
