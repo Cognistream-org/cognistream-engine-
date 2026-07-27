@@ -25,4 +25,11 @@ describe('createLogger', () => {
       spanId: 'span-1',
     });
   });
+
+  it('binds requestId without optional trace fields', () => {
+    const logger = createLogger({ level: 'silent', isProduction: true, service: 'custom' });
+    const child = bindRequestLogger(logger, { requestId: 'req-2' });
+    expect(child.bindings()).toMatchObject({ requestId: 'req-2' });
+    expect(child.bindings().traceId).toBeUndefined();
+  });
 });

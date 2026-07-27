@@ -100,6 +100,19 @@ describe('health endpoints v2', () => {
     await app.close();
   });
 
+  it('GET /health/ready returns error when both dependencies are down', async () => {
+    vi.mocked(checkDatabaseDetailed).mockResolvedValue({ ok: false, latencyMs: 2 });
+    vi.mocked(checkRedisDetailed).mockResolvedValue({ ok: false, latencyMs: 3 });
+
+    const app = await buildApp(env, pino({ level: 'silent' }));
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().status).toBe('error');
+
+    await app.close();
+  });
+
   it('GET /health/deep includes disk check', async () => {
     vi.mocked(checkDatabaseDetailed).mockResolvedValue({ ok: true, latencyMs: 1 });
     vi.mocked(checkRedisDetailed).mockResolvedValue({ ok: true, latencyMs: 1 });
@@ -112,6 +125,41 @@ describe('health endpoints v2', () => {
     expect(body.checks.database.status).toBe('up');
     expect(body.checks.redis.status).toBe('up');
     expect(body.checks.disk.status).toBe('up');
+
+    await app.close();
+  });
+
+  it('GET /health/deep returns 503 on timeout', async () => {
+    vi.mocked(checkDatabaseDetailed).mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, latencyMs: 1 }), 10_000)),
+    );
+    vi.mocked(checkRedisDetailed).mockResolvedValue({ ok: true, latencyMs: 1 });
+
+    const app = await buildApp(env, pino({ level: 'silent' }));
+    const response = await app.inject({ method: 'GET', url: '/health/deep' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'error',
+      checks: {
+        database: { status: 'down' },
+        redis: { status: 'down' },
+        disk: { status: 'down' },
+      },
+    });
+
+    await app.close();
+  });
+
+  it('GET /health/deep returns 503 when deep checks report down', async () => {
+    vi.mocked(checkDatabaseDetailed).mockResolvedValue({ ok: false, latencyMs: 1 });
+    vi.mocked(checkRedisDetailed).mockResolvedValue({ ok: true, latencyMs: 1 });
+
+    const app = await buildApp(env, pino({ level: 'silent' }));
+    const response = await app.inject({ method: 'GET', url: '/health/deep' });
+
+    expect(response.statusCode).toBe(503);
+    expect(['degraded', 'error']).toContain(response.json().status);
 
     await app.close();
   });
@@ -142,6 +190,61 @@ describe('GET /metrics', () => {
     });
 
     expect(response.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('honors x-forwarded-for string header for allowlisting', async () => {
+    const app = await buildApp(env, pino({ level: 'silent' }));
+    const allowed = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      remoteAddress: '8.8.8.8',
+      headers: { 'x-forwarded-for': '127.0.0.1, 10.0.0.1' },
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    const denied = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': '8.8.8.8' },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('honors x-forwarded-for array header', async () => {
+    const app = await buildApp(env, pino({ level: 'silent' }));
+    const response = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      remoteAddress: '8.8.8.8',
+      headers: { 'x-forwarded-for': ['127.0.0.1', '10.0.0.2'] },
+    });
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('uses default allowlist when METRICS_IP_ALLOWLIST is empty', async () => {
+    const app = await buildApp(
+      { ...env, METRICS_IP_ALLOWLIST: [] },
+      pino({ level: 'silent' }),
+    );
+    const local = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(local.statusCode).toBe(200);
+
+    const privateIp = await app.inject({
+      method: 'GET',
+      url: '/metrics',
+      remoteAddress: '10.2.3.4',
+    });
+    expect(privateIp.statusCode).toBe(200);
 
     await app.close();
   });
