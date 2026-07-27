@@ -9,8 +9,10 @@ export {
 
 export {
   ServiceStatusSchema,
+  HealthDependencyCheckSchema,
   HealthCheckSchema,
   type ServiceStatus,
+  type HealthDependencyCheck,
   type HealthCheck,
 } from './health.js';
 
