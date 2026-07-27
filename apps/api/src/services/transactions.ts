@@ -5,6 +5,11 @@ import type { Redis } from 'ioredis';
 import { prisma } from '../lib/prisma.js';
 import { createId } from '../lib/uuid.js';
 import { AppError } from '../lib/errors.js';
+import {
+  withSpan,
+  recordTransaction,
+  adjustEscrowActiveAmount,
+} from '../telemetry/index.js';
 import { updateReputation, type ReputationRating } from './reputation.js';
 import { dispatchEvent } from './webhooks.js';
 import { publishRealtime } from '../lib/realtime.js';
@@ -155,60 +160,71 @@ export async function createTransaction(
   requestId = 'unknown',
   redis?: Redis,
 ): Promise<CreateTransactionResult> {
-  const amountCents = BigInt(input.amountCents);
+  return withSpan(
+    'escrow.create',
+    async (span) => {
+      const amountCents = BigInt(input.amountCents);
+      span.setAttribute('transaction.amount_cents', amountCents.toString());
+      span.setAttribute('transaction.buyer_id', buyerId);
+      span.setAttribute('transaction.seller_id', input.sellerId);
 
-  if (amountCents <= 0n) {
-    throw new AppError('VALIDATION_ERROR', 'amountCents must be greater than 0', 422, requestId);
-  }
-
-  if (buyerId === input.sellerId) {
-    throw new AppError(
-      'SELF_TRANSACTION_NOT_ALLOWED',
-      'Buyer and seller must be different agents',
-      422,
-      requestId,
-    );
-  }
-
-  const feeCents = calculateFeeCents(amountCents);
-  const maxAttempts = 3;
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const result = await attemptCreateTransaction(
-        buyerId,
-        input,
-        amountCents,
-        feeCents,
-        requestId,
-      );
-
-      if (!result.isDuplicate) {
-        const payload = {
-          transactionId: result.transaction.id,
-          buyerId: result.transaction.buyerId,
-          sellerId: result.transaction.sellerId,
-          amountCents: result.transaction.amountCents.toString(),
-          feeCents: result.transaction.feeCents.toString(),
-          status: result.transaction.status,
-        };
-        void dispatchEvent(result.buyerOrgId, 'transaction.created', payload).catch(() => undefined);
-        if (redis) {
-          void publishRealtime(redis, result.buyerOrgId, 'transaction.created', payload).catch(
-            () => undefined,
-          );
-          void publishRealtime(
-            redis,
-            result.transaction.seller.orgId,
-            'transaction.created',
-            payload,
-          ).catch(() => undefined);
-        }
+      if (amountCents <= 0n) {
+        throw new AppError('VALIDATION_ERROR', 'amountCents must be greater than 0', 422, requestId);
       }
 
-      return { transaction: result.transaction, isDuplicate: result.isDuplicate };
-    } catch (error) {
+      if (buyerId === input.sellerId) {
+        throw new AppError(
+          'SELF_TRANSACTION_NOT_ALLOWED',
+          'Buyer and seller must be different agents',
+          422,
+          requestId,
+        );
+      }
+
+      const feeCents = calculateFeeCents(amountCents);
+      const maxAttempts = 3;
+      let lastError: unknown;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const result = await attemptCreateTransaction(
+            buyerId,
+            input,
+            amountCents,
+            feeCents,
+            requestId,
+          );
+
+          if (!result.isDuplicate) {
+            recordTransaction(result.transaction.status, 'escrow_create');
+            adjustEscrowActiveAmount(Number(result.transaction.amountCents));
+            span.setAttribute('transaction.id', result.transaction.id);
+            span.setAttribute('transaction.status', result.transaction.status);
+
+            const payload = {
+              transactionId: result.transaction.id,
+              buyerId: result.transaction.buyerId,
+              sellerId: result.transaction.sellerId,
+              amountCents: result.transaction.amountCents.toString(),
+              feeCents: result.transaction.feeCents.toString(),
+              status: result.transaction.status,
+            };
+            void dispatchEvent(result.buyerOrgId, 'transaction.created', payload).catch(() => undefined);
+            if (redis) {
+              void publishRealtime(redis, result.buyerOrgId, 'transaction.created', payload).catch(
+                () => undefined,
+              );
+              void publishRealtime(
+                redis,
+                result.transaction.seller.orgId,
+                'transaction.created',
+                payload,
+              ).catch(() => undefined);
+            }
+          }
+
+          return { transaction: result.transaction, isDuplicate: result.isDuplicate };
+        } catch (error) {
       if (error instanceof AppError) {
         throw error;
       }
@@ -259,6 +275,11 @@ export async function createTransaction(
   throw lastError instanceof Error
     ? lastError
     : new AppError('CONFLICT', 'Transaction conflict; please retry', 409, requestId);
+    },
+    {
+      'request.id': requestId,
+    },
+  );
 }
 
 async function attemptCreateTransaction(
@@ -380,152 +401,165 @@ export async function releaseEscrow(
   const requestId = options?.requestId ?? 'unknown';
   const rating = options?.rating;
 
-  if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
-    throw new AppError('INVALID_RATING', 'Rating must be an integer from 1 to 5', 422, requestId);
-  }
+  return withSpan(
+    'transaction.settle',
+    async (span) => {
+      span.setAttribute('transaction.id', transactionId);
+      span.setAttribute('organization.id', buyerOrgId);
 
-  const result = await prisma.$transaction(
-    async (tx) => {
-      const existing = await tx.transaction.findUnique({
-        where: { id: transactionId },
-        select: {
-          ...transactionDetailSelect,
-          buyer: { select: { ...agentSummarySelect, balanceCents: true } },
+      if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
+        throw new AppError('INVALID_RATING', 'Rating must be an integer from 1 to 5', 422, requestId);
+      }
+
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const existing = await tx.transaction.findUnique({
+            where: { id: transactionId },
+            select: {
+              ...transactionDetailSelect,
+              buyer: { select: { ...agentSummarySelect, balanceCents: true } },
+            },
+          });
+
+          if (!existing || existing.buyer.orgId !== buyerOrgId) {
+            throw new AppError('TRANSACTION_NOT_FOUND', 'Transaction not found', 404, requestId);
+          }
+
+          if (existing.status === 'settled') {
+            throw new AppError(
+              'TRANSACTION_ALREADY_SETTLED',
+              'Transaction has already been settled',
+              409,
+              requestId,
+            );
+          }
+
+          if (existing.status !== 'escrowed' || !existing.escrow) {
+            throw new AppError(
+              'TRANSACTION_NOT_FOUND',
+              'Transaction is not in escrowed state',
+              404,
+              requestId,
+            );
+          }
+
+          if (existing.escrow.released) {
+            throw new AppError(
+              'ESCROW_ALREADY_RELEASED',
+              'Escrow has already been released',
+              409,
+              requestId,
+            );
+          }
+
+          const now = new Date();
+          if (existing.escrow.expiresAt.getTime() <= now.getTime()) {
+            throw new AppError('ESCROW_EXPIRED', 'Escrow has expired', 409, requestId);
+          }
+
+          // Lock seller + buyer's org for settlement credits
+          const seller = await lockAgent(tx, existing.sellerId);
+          if (!seller) {
+            throw new AppError('AGENT_NOT_FOUND', 'Seller agent not found', 404, requestId);
+          }
+
+          const org = await lockOrganization(tx, existing.buyer.orgId);
+          if (!org) {
+            throw new AppError('NOT_FOUND', 'Buyer organization not found', 404, requestId);
+          }
+
+          const sellerCredit = existing.amountCents - existing.feeCents;
+
+          await tx.agent.update({
+            where: { id: existing.sellerId },
+            data: { balanceCents: { increment: sellerCredit } },
+          });
+
+          await tx.organization.update({
+            where: { id: existing.buyer.orgId },
+            data: { balanceCents: { increment: existing.feeCents } },
+          });
+
+          await tx.escrow.update({
+            where: { id: existing.escrow.id },
+            data: { released: true, releasedAt: now },
+          });
+
+          await tx.transaction.update({
+            where: { id: transactionId },
+            data: {
+              status: 'settled',
+              settledAt: now,
+              ...(options?.review
+                ? {
+                    metadata: {
+                      ...((existing.metadata as Record<string, unknown> | null) ?? {}),
+                      review: options.review,
+                    } as Prisma.InputJsonValue,
+                  }
+                : {}),
+            },
+          });
+
+          return tx.transaction.findUniqueOrThrow({
+            where: { id: transactionId },
+            select: transactionDetailSelect,
+          });
         },
-      });
-
-      if (!existing || existing.buyer.orgId !== buyerOrgId) {
-        throw new AppError('TRANSACTION_NOT_FOUND', 'Transaction not found', 404, requestId);
-      }
-
-      if (existing.status === 'settled') {
-        throw new AppError(
-          'TRANSACTION_ALREADY_SETTLED',
-          'Transaction has already been settled',
-          409,
-          requestId,
-        );
-      }
-
-      if (existing.status !== 'escrowed' || !existing.escrow) {
-        throw new AppError(
-          'TRANSACTION_NOT_FOUND',
-          'Transaction is not in escrowed state',
-          404,
-          requestId,
-        );
-      }
-
-      if (existing.escrow.released) {
-        throw new AppError(
-          'ESCROW_ALREADY_RELEASED',
-          'Escrow has already been released',
-          409,
-          requestId,
-        );
-      }
-
-      const now = new Date();
-      if (existing.escrow.expiresAt.getTime() <= now.getTime()) {
-        throw new AppError('ESCROW_EXPIRED', 'Escrow has expired', 409, requestId);
-      }
-
-      // Lock seller + buyer's org for settlement credits
-      const seller = await lockAgent(tx, existing.sellerId);
-      if (!seller) {
-        throw new AppError('AGENT_NOT_FOUND', 'Seller agent not found', 404, requestId);
-      }
-
-      const org = await lockOrganization(tx, existing.buyer.orgId);
-      if (!org) {
-        throw new AppError('NOT_FOUND', 'Buyer organization not found', 404, requestId);
-      }
-
-      const sellerCredit = existing.amountCents - existing.feeCents;
-
-      await tx.agent.update({
-        where: { id: existing.sellerId },
-        data: { balanceCents: { increment: sellerCredit } },
-      });
-
-      await tx.organization.update({
-        where: { id: existing.buyer.orgId },
-        data: { balanceCents: { increment: existing.feeCents } },
-      });
-
-      await tx.escrow.update({
-        where: { id: existing.escrow.id },
-        data: { released: true, releasedAt: now },
-      });
-
-      await tx.transaction.update({
-        where: { id: transactionId },
-        data: {
-          status: 'settled',
-          settledAt: now,
-          ...(options?.review
-            ? {
-                metadata: {
-                  ...((existing.metadata as Record<string, unknown> | null) ?? {}),
-                  review: options.review,
-                } as Prisma.InputJsonValue,
-              }
-            : {}),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5_000,
+          timeout: 15_000,
         },
-      });
+      );
 
-      return tx.transaction.findUniqueOrThrow({
-        where: { id: transactionId },
-        select: transactionDetailSelect,
-      });
+      recordTransaction(result.status, 'settlement');
+      adjustEscrowActiveAmount(-Number(result.amountCents));
+      span.setAttribute('transaction.status', result.status);
+
+      if (rating !== undefined) {
+        void updateReputation(result.sellerId, 'positive_trade', rating as ReputationRating, {
+          metadata: { transactionId: result.id, review: options?.review },
+          requestId,
+        }).catch(() => undefined);
+      }
+
+      void dispatchEvent(result.buyer.orgId, 'transaction.settled', {
+        transactionId: result.id,
+        buyerId: result.buyerId,
+        sellerId: result.sellerId,
+        amountCents: result.amountCents.toString(),
+        feeCents: result.feeCents.toString(),
+        status: result.status,
+      }).catch(() => undefined);
+
+      void dispatchEvent(result.buyer.orgId, 'escrow.released', {
+        transactionId: result.id,
+        escrowId: result.escrow?.id,
+        amountCents: result.amountCents.toString(),
+      }).catch(() => undefined);
+
+      if (options?.redis) {
+        const settledPayload = {
+          transactionId: result.id,
+          buyerId: result.buyerId,
+          sellerId: result.sellerId,
+          amountCents: result.amountCents.toString(),
+          feeCents: result.feeCents.toString(),
+          status: result.status,
+        };
+        void publishRealtime(options.redis, result.buyer.orgId, 'transaction.settled', settledPayload).catch(
+          () => undefined,
+        );
+        void publishRealtime(options.redis, result.seller.orgId, 'transaction.settled', settledPayload).catch(
+          () => undefined,
+        );
+      }
+
+      return result;
     },
-    {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      maxWait: 5_000,
-      timeout: 15_000,
-    },
+    { 'request.id': requestId },
   );
-
-  if (rating !== undefined) {
-    void updateReputation(result.sellerId, 'positive_trade', rating as ReputationRating, {
-      metadata: { transactionId: result.id, review: options?.review },
-      requestId,
-    }).catch(() => undefined);
-  }
-
-  void dispatchEvent(result.buyer.orgId, 'transaction.settled', {
-    transactionId: result.id,
-    buyerId: result.buyerId,
-    sellerId: result.sellerId,
-    amountCents: result.amountCents.toString(),
-    feeCents: result.feeCents.toString(),
-    status: result.status,
-  }).catch(() => undefined);
-
-  void dispatchEvent(result.buyer.orgId, 'escrow.released', {
-    transactionId: result.id,
-    escrowId: result.escrow?.id,
-    amountCents: result.amountCents.toString(),
-  }).catch(() => undefined);
-
-  if (options?.redis) {
-    const settledPayload = {
-      transactionId: result.id,
-      buyerId: result.buyerId,
-      sellerId: result.sellerId,
-      amountCents: result.amountCents.toString(),
-      feeCents: result.feeCents.toString(),
-      status: result.status,
-    };
-    void publishRealtime(options.redis, result.buyer.orgId, 'transaction.settled', settledPayload).catch(
-      () => undefined,
-    );
-    void publishRealtime(options.redis, result.seller.orgId, 'transaction.settled', settledPayload).catch(
-      () => undefined,
-    );
-  }
-
-  return result;
 }
 
 export async function getTransaction(

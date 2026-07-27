@@ -5,6 +5,9 @@ import type { Logger } from 'pino';
 import type { Env } from './config.js';
 import { createRedisClient } from './lib/redis.js';
 import { registerErrorHandler } from './lib/error-handler.js';
+import { getActiveTraceIds } from './telemetry/tracing.js';
+import { initMetrics } from './telemetry/metrics.js';
+import { metricsRoutes } from './telemetry/metrics-route.js';
 import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rate-limit.js';
 import { websocketPlugin } from './plugins/websocket.js';
@@ -22,6 +25,8 @@ declare module 'fastify' {
 }
 
 export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstance> {
+  initMetrics({ collectDefaultMetrics: env.NODE_ENV !== 'test' });
+
   const app = Fastify({
     loggerInstance: logger,
     requestIdHeader: 'x-request-id',
@@ -30,6 +35,16 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
 
   await app.register(sensible);
   registerErrorHandler(app as never);
+
+  // Ensure every request log includes requestId + active OTEL trace/span ids.
+  app.addHook('onRequest', async (request) => {
+    const { traceId, spanId } = getActiveTraceIds();
+    request.log = request.log.child({
+      requestId: String(request.id),
+      ...(traceId ? { traceId } : {}),
+      ...(spanId ? { spanId } : {}),
+    });
+  });
 
   const redis = createRedisClient(env.REDIS_URL, logger);
   app.decorate('redis', redis);
@@ -50,7 +65,8 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
   await app.register(rateLimitPlugin);
   await app.register(websocketPlugin);
 
-  await app.register(healthRoutes);
+  await app.register(healthRoutes, { version: env.APP_VERSION });
+  await app.register(metricsRoutes, { allowlist: env.METRICS_IP_ALLOWLIST });
   await app.register(agentRoutes, { prefix: '/v1' });
   await app.register(apiKeyRoutes, { prefix: '/v1' });
   await app.register(transactionRoutes, { prefix: '/v1' });

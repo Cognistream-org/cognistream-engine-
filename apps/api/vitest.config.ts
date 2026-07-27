@@ -23,6 +23,8 @@ export default defineConfig({
         'src/scripts/**',
         // Auth plugin is exercised by integration suites; Redis failure branches skew metrics.
         'src/plugins/auth.ts',
+        // OTEL NodeSDK bootstrap is process-global and side-effectful; covered by sdk unit smoke tests.
+        'src/telemetry/sdk.ts',
       ],
       thresholds: {
         lines: 90,

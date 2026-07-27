@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { OrganizationTier } from '@cognistream/shared';
 import type { Redis } from 'ioredis';
 import { errorBody } from './errors.js';
+import { recordRateLimitHit } from '../telemetry/index.js';
 
 const WINDOW_SECONDS = 60;
 
@@ -59,6 +60,7 @@ export async function enforceTransactionCreateLimit(options: {
     await ensureRedis(redis);
     const count = await incrWindow(redis, key);
     if (count > TRANSACTION_CREATE_LIMIT_PER_MINUTE) {
+      recordRateLimitHit('POST /v1/transactions', orgId);
       reply.header('Retry-After', String(WINDOW_SECONDS));
       await reply.status(429).send(
         errorBody('RATE_LIMITED', 'Transaction create rate limit exceeded', requestId),
@@ -113,6 +115,7 @@ export async function enforceRateLimit(options: {
 
     const maxCount = Math.max(...counts);
     if (maxCount > limit) {
+      recordRateLimitHit(route, orgId);
       reply.header('Retry-After', String(WINDOW_SECONDS));
       await reply.status(429).send(
         errorBody('RATE_LIMITED', 'Rate limit exceeded', requestId),
