@@ -66,6 +66,9 @@ import {
   recordApiCall,
   recordTransaction,
   recordAgentCreated,
+  recordWebhookCreated,
+  recordDisputeCreated,
+  flushUsageToDatabase,
 } from '../services/billing.js';
 
 describe('usage counter helpers', () => {
@@ -339,6 +342,222 @@ describe('usageMeteringPlugin integration', () => {
     expect(res.json().error.code).toBe('QUOTA_EXCEEDED');
     expect(recordApiCall).not.toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it('records webhooks and disputes meters on successful POSTs', async () => {
+    const { redis } = createMemoryRedis();
+    const app = Fastify();
+    app.decorate('redis', redis);
+    await app.register(fp(async () => undefined, { name: 'auth-plugin' }));
+    await app.register(usageMeteringPlugin);
+
+    await app.register(
+      async (scoped) => {
+        const auth = async (request: { auth?: unknown }) => {
+          request.auth = {
+            orgId: 'org-1',
+            apiKeyId: 'key-1',
+            scopes: ['write:webhooks'],
+            tier: 'developer',
+          };
+        };
+        scoped.post('/webhooks', { preHandler: auth as never }, async () => ({ id: 'wh-1' }));
+        scoped.post('/disputes', { preHandler: auth as never }, async () => ({ id: 'dp-1' }));
+      },
+      { prefix: '/v1' },
+    );
+
+    expect((await app.inject({ method: 'POST', url: '/v1/webhooks', payload: {} })).statusCode).toBe(
+      200,
+    );
+    expect(recordWebhookCreated).toHaveBeenCalled();
+
+    expect((await app.inject({ method: 'POST', url: '/v1/disputes', payload: {} })).statusCode).toBe(
+      200,
+    );
+    expect(recordDisputeCreated).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('logs when usage increment fails after a successful response', async () => {
+    vi.mocked(recordApiCall).mockRejectedValueOnce(new Error('redis down'));
+    const { redis } = createMemoryRedis();
+    const app = Fastify();
+    app.decorate('redis', redis);
+    await app.register(fp(async () => undefined, { name: 'auth-plugin' }));
+    await app.register(usageMeteringPlugin);
+
+    await app.register(
+      async (scoped) => {
+        scoped.get(
+          '/agents',
+          {
+            preHandler: async (request) => {
+              request.auth = {
+                orgId: 'org-1',
+                apiKeyId: 'key-1',
+                scopes: ['read:agents'],
+                tier: 'free',
+              };
+            },
+          },
+          async () => ({ ok: true }),
+        );
+      },
+      { prefix: '/v1' },
+    );
+
+    const res = await app.inject({ method: 'GET', url: '/v1/agents' });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('starts flush timer outside test env and swallows flush errors', async () => {
+    vi.useFakeTimers();
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    vi.mocked(flushUsageToDatabase).mockRejectedValueOnce(new Error('flush failed'));
+
+    try {
+      const { redis } = createMemoryRedis();
+      const app = Fastify({ logger: false });
+      app.decorate('redis', redis);
+      await app.register(fp(async () => undefined, { name: 'auth-plugin' }));
+      await app.register(usageMeteringPlugin);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(flushUsageToDatabase).toHaveBeenCalled();
+      await app.close();
+    } finally {
+      process.env.NODE_ENV = previous;
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('enforceUsageMetering path + amount edge cases', () => {
+  const orgId = 'org-path';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(checkLimits).mockResolvedValue({
+      allowed: true,
+      currentUsage: 0,
+      limit: 100,
+      softWarning: false,
+      overageQuantity: 0,
+      hardLimit: 100,
+    });
+  });
+
+  it('resolves path from routeOptions when url is not prefixed with /v1', async () => {
+    const { redis } = createMemoryRedis();
+    const reply = { header: vi.fn(), status: vi.fn() };
+    const request = {
+      id: 'req-path',
+      method: 'POST',
+      url: '/agents?x=1',
+      routeOptions: { url: '/agents', prefix: '/v1' },
+      body: { amountCents: '42' },
+    };
+
+    const ok = await enforceUsageMetering({
+      redis,
+      orgId,
+      request: request as never,
+      reply: reply as never,
+    });
+    expect(ok).toBe(true);
+    expect((request as { usageMeterPlan?: { record: string[] } }).usageMeterPlan?.record).toContain(
+      'agents',
+    );
+  });
+
+  it('builds /v1 path when routeOptions lack prefix', async () => {
+    const { redis } = createMemoryRedis();
+    const reply = { header: vi.fn(), status: vi.fn() };
+    const request = {
+      id: 'req-noprefix',
+      method: 'GET',
+      url: '/agents',
+      routeOptions: { url: 'agents' },
+    };
+
+    await enforceUsageMetering({
+      redis,
+      orgId,
+      request: request as never,
+      reply: reply as never,
+    });
+    expect(checkLimits).toHaveBeenCalled();
+  });
+
+  it('uses default soft-limit header text when reason is omitted', async () => {
+    vi.mocked(checkLimits).mockResolvedValue({
+      allowed: true,
+      currentUsage: 80,
+      limit: 100,
+      softWarning: true,
+      overageQuantity: 0,
+      hardLimit: 100,
+    });
+    const { redis } = createMemoryRedis();
+    const reply = { header: vi.fn(), status: vi.fn() };
+    await enforceUsageMetering({
+      redis,
+      orgId,
+      request: {
+        id: 'req-soft',
+        method: 'GET',
+        url: '/v1/agents',
+        routeOptions: { url: '/agents', prefix: '/v1' },
+      } as never,
+      reply: reply as never,
+    });
+    expect(reply.header).toHaveBeenCalledWith(
+      'X-Usage-Warning',
+      expect.stringContaining('soft limit'),
+    );
+  });
+
+  it('parses amountCents from bigint and rejects negative via 0n clamp on inject path', async () => {
+    const { redis } = createMemoryRedis();
+    const app = Fastify();
+    app.decorate('redis', redis);
+    await app.register(fp(async () => undefined, { name: 'auth-plugin' }));
+    await app.register(usageMeteringPlugin);
+
+    await app.register(
+      async (scoped) => {
+        scoped.post(
+          '/transactions',
+          {
+            preHandler: async (request) => {
+              request.auth = {
+                orgId: 'org-1',
+                apiKeyId: 'key-1',
+                scopes: ['write:transactions'],
+                tier: 'free',
+              };
+              // Simulate pre-parsed bigint body
+              (request as { body: unknown }).body = { amountCents: 99n };
+            },
+          },
+          async () => ({ id: 'tx' }),
+        );
+      },
+      { prefix: '/v1' },
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/transactions',
+      payload: { amountCents: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(recordTransaction).toHaveBeenCalled();
     await app.close();
   });
 });
