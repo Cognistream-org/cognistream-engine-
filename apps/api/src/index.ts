@@ -1,21 +1,28 @@
 import 'dotenv/config';
 import cron from 'node-cron';
 import { loadEnv } from './config.js';
-import { buildApp } from './app.js';
-import { createLogger } from './lib/logger.js';
-import { prisma } from './lib/prisma.js';
-import { processExpiredEscrows } from './jobs/escrow-refund.js';
-import {
-  buildTelemetryConfig,
-  startTelemetry,
-  shutdownTelemetry,
-  withSpan,
-  captureContext,
-  withCapturedContext,
-} from './telemetry/index.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
+  process.env.ENCRYPTION_KEYS = env.ENCRYPTION_KEYS;
+  process.env.AUDIT_HMAC_KEY = env.AUDIT_HMAC_KEY;
+
+  // Dynamic imports after encryption keys are set so Prisma extensions see them.
+  const { buildApp } = await import('./app.js');
+  const { createLogger } = await import('./lib/logger.js');
+  const { prisma } = await import('./lib/prisma.js');
+  const { processExpiredEscrows } = await import('./jobs/escrow-refund.js');
+  const { registerGracefulShutdown } = await import('./resilience/graceful-shutdown.js');
+  const { stopAuditRuntime } = await import('./security/audit-runtime.js');
+  const {
+    buildTelemetryConfig,
+    startTelemetry,
+    shutdownTelemetry,
+    withSpan,
+    captureContext,
+    withCapturedContext,
+  } = await import('./telemetry/index.js');
+
   const logger = createLogger({
     level: env.LOG_LEVEL,
     isProduction: env.NODE_ENV === 'production',
@@ -51,17 +58,17 @@ async function main(): Promise<void> {
     });
   });
 
-  const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Shutting down');
-    refundJob.stop();
-    await app.close();
-    await prisma.$disconnect();
-    await shutdownTelemetry(logger);
-    process.exit(0);
-  };
-
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  registerGracefulShutdown({
+    app,
+    redis: app.redis,
+    prisma,
+    logger,
+    onBeforeClose: async () => {
+      refundJob.stop();
+      await stopAuditRuntime();
+      await shutdownTelemetry(logger);
+    },
+  });
 
   try {
     await app.listen({ host: env.API_HOST, port: env.API_PORT });
@@ -69,6 +76,7 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error({ err: error }, 'Failed to start API');
     refundJob.stop();
+    await stopAuditRuntime();
     await prisma.$disconnect();
     await shutdownTelemetry(logger);
     process.exit(1);

@@ -8,6 +8,8 @@ import {
   captureContext,
   withCapturedContext,
 } from '../telemetry/index.js';
+import { withRetry } from '../resilience/retry.js';
+import { getCircuitBreaker } from '../resilience/circuit-breaker.js';
 
 export type WebhookEvent =
   | 'transaction.created'
@@ -17,9 +19,6 @@ export type WebhookEvent =
   | 'reputation.changed'
   | 'dispute.created'
   | 'dispute.resolved';
-
-const MAX_ATTEMPTS = 3;
-const BASE_DELAY_MS = 100;
 
 const webhookLogger = pino({
   name: 'webhooks',
@@ -35,13 +34,19 @@ export function signWebhookPayload(payload: string, secret: string): string {
   return `sha256=${hex}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'invalid';
+  }
 }
 
-async function postWithRetry(
+/**
+ * Deliver a signed webhook with circuit breaker + exponential backoff retry,
+ * under an OpenTelemetry delivery span with trace header injection.
+ */
+async function postWebhook(
   url: string,
   body: string,
   signature: string,
@@ -54,59 +59,59 @@ async function postWithRetry(
       span.setAttribute('webhook.event', String(logContext.event ?? ''));
 
       const started = process.hrtime.bigint();
-      const headers = injectTraceHeaders({
-        'Content-Type': 'application/json',
-        'X-CogniStream-Signature': signature,
-        'User-Agent': 'CogniStream-Webhooks/1.0',
+      // High threshold so per-delivery retries are not cut short by the breaker.
+      const breaker = getCircuitBreaker('external_webhook', { failureThreshold: 50 });
+
+      await withRetry(
+        async (attempt) => {
+          span.setAttribute('webhook.attempt', attempt);
+          await breaker.execute(async () => {
+            const headers = injectTraceHeaders({
+              'Content-Type': 'application/json',
+              'X-CogniStream-Signature': signature,
+              'User-Agent': 'CogniStream-Webhooks/1.0',
+            });
+
+            const response = await fetch(url, {
+              method: 'POST',
+              headers,
+              body,
+            });
+
+            if (!response.ok) {
+              webhookLogger.warn(
+                { ...logContext, attempt, status: response.status },
+                'Webhook delivery non-OK response',
+              );
+              throw new Error(`Webhook HTTP ${response.status}`);
+            }
+
+            webhookLogger.info(
+              { ...logContext, attempt, status: response.status },
+              'Webhook delivered',
+            );
+          });
+        },
+        {
+          maxAttempts: 6,
+          backoffMs:
+            process.env.NODE_ENV === 'test' ? [1, 2, 4, 8, 16, 32] : undefined,
+          shouldRetry: () => true,
+        },
+      ).catch((error: unknown) => {
+        webhookLogger.error(
+          { ...logContext, err: error },
+          'Webhook delivery exhausted retries',
+        );
       });
 
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-        span.setAttribute('webhook.attempt', attempt);
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body,
-          });
-
-          if (response.ok) {
-            webhookLogger.info({ ...logContext, attempt, status: response.status }, 'Webhook delivered');
-            observeWebhookDelivery(Number(process.hrtime.bigint() - started) / 1e9);
-            return;
-          }
-
-          webhookLogger.warn(
-            { ...logContext, attempt, status: response.status },
-            'Webhook delivery non-OK response',
-          );
-        } catch (error) {
-          webhookLogger.warn({ ...logContext, attempt, err: error }, 'Webhook delivery failed');
-        }
-
-        if (attempt < MAX_ATTEMPTS) {
-          await sleep(BASE_DELAY_MS * 2 ** (attempt - 1));
-        }
-      }
-
       observeWebhookDelivery(Number(process.hrtime.bigint() - started) / 1e9);
-      webhookLogger.error(
-        { ...logContext, attempts: MAX_ATTEMPTS },
-        'Webhook delivery exhausted retries',
-      );
     },
     {
       'webhook.id': String(logContext.webhookId ?? ''),
       'organization.id': String(logContext.orgId ?? ''),
     },
   );
-}
-
-function safeHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return 'invalid';
-  }
 }
 
 /**
@@ -149,7 +154,7 @@ export async function dispatchEvent(
     webhooks.map(async (hook) => {
       const signature = signWebhookPayload(body, hook.secret);
       await withCapturedContext(parentCtx, async () =>
-        postWithRetry(hook.url, body, signature, {
+        postWebhook(hook.url, body, signature, {
           webhookId: hook.id,
           orgId,
           event,

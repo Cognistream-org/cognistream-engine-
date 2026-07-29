@@ -4,6 +4,7 @@ import type { CreateAgentInput, ListAgentsQuery } from '@cognistream/shared';
 import { prisma } from '../lib/prisma.js';
 import { createId } from '../lib/uuid.js';
 import { AppError } from '../lib/errors.js';
+import { recordAudit } from '../security/audit-runtime.js';
 
 export const agentSelect = {
   id: true,
@@ -50,7 +51,7 @@ export async function createAgent(
   requestId = 'unknown',
 ): Promise<AgentRow> {
   try {
-    return await prisma.agent.create({
+    const agent = await prisma.agent.create({
       data: {
         id: createId(),
         orgId,
@@ -63,6 +64,16 @@ export async function createAgent(
       },
       select: agentSelect,
     });
+    void recordAudit({
+      orgId,
+      action: 'agent.created',
+      entityType: 'agent',
+      entityId: agent.id,
+      actorType: 'api_key',
+      result: 'success',
+      changes: { name: input.name, status: 'active' },
+    });
+    return agent;
   } catch (error) {
     if (
       error instanceof PrismaNS.PrismaClientKnownRequestError &&
@@ -154,9 +165,19 @@ export async function setAgentStatus(
     throw new AgentNotFoundError(requestId);
   }
 
-  return prisma.agent.update({
+  const updated = await prisma.agent.update({
     where: { id: agentId },
     data: { status },
     select: agentSelect,
   });
+  void recordAudit({
+    orgId,
+    action: 'agent.status_changed',
+    entityType: 'agent',
+    entityId: agentId,
+    actorType: 'api_key',
+    result: 'success',
+    changes: { status },
+  });
+  return updated;
 }

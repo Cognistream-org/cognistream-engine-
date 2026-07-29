@@ -13,6 +13,7 @@ import {
 import { updateReputation, type ReputationRating } from './reputation.js';
 import { dispatchEvent } from './webhooks.js';
 import { publishRealtime } from '../lib/realtime.js';
+import { recordAudit } from '../security/audit-runtime.js';
 
 /** Platform fee rate: 0.5%. Use integer math only — never float. */
 export const FEE_RATE_NUMERATOR = 5n;
@@ -210,6 +211,16 @@ export async function createTransaction(
               status: result.transaction.status,
             };
             void dispatchEvent(result.buyerOrgId, 'transaction.created', payload).catch(() => undefined);
+            void recordAudit({
+              orgId: result.buyerOrgId,
+              action: 'transaction.created',
+              entityType: 'transaction',
+              entityId: result.transaction.id,
+              actorType: 'agent',
+              actorId: buyerId,
+              result: 'success',
+              changes: payload,
+            });
             if (redis) {
               void publishRealtime(redis, result.buyerOrgId, 'transaction.created', payload).catch(
                 () => undefined,
@@ -538,6 +549,16 @@ export async function releaseEscrow(
         escrowId: result.escrow?.id,
         amountCents: result.amountCents.toString(),
       }).catch(() => undefined);
+
+      void recordAudit({
+        orgId: result.buyer.orgId,
+        action: 'escrow.released',
+        entityType: 'escrow',
+        entityId: result.escrow?.id ?? result.id,
+        actorType: 'api_key',
+        result: 'success',
+        changes: { transactionId: result.id, status: 'settled' },
+      });
 
       if (options?.redis) {
         const settledPayload = {

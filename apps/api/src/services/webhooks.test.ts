@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signWebhookPayload, dispatchEvent } from './webhooks.js';
 import { prisma } from '../lib/prisma.js';
+import { resetCircuitBreakers } from '../resilience/circuit-breaker.js';
 
 describe('signWebhookPayload', () => {
   it('produces sha256=<hex> HMAC signature', () => {
@@ -24,6 +25,7 @@ describe('dispatchEvent', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetCircuitBreakers();
   });
 
   it('no-ops when no webhooks match', async () => {
@@ -89,6 +91,20 @@ describe('dispatchEvent', () => {
     await vi.runAllTimersAsync();
     await done;
 
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
+  });
+
+  it('handles invalid webhook URL host without throwing', async () => {
+    vi.spyOn(prisma.webhook, 'findMany').mockResolvedValue([
+      { id: 'hook-1', url: 'not-a-url', secret: 's' },
+    ] as never);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+
+    await dispatchEvent('org-1', 'dispute.created', { id: 'd1' });
+    expect(fetchSpy).toHaveBeenCalled();
   });
 });

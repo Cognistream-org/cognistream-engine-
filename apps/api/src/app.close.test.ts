@@ -39,6 +39,8 @@ const env: Env = {
   OTEL_SERVICE_NAME: 'cognistream-api-test',
   METRICS_IP_ALLOWLIST: ['127.0.0.1'],
   APP_VERSION: '0.1.0-test',
+  ENCRYPTION_KEYS: `test:${Buffer.alloc(32, 1).toString('base64')}`,
+  AUDIT_HMAC_KEY: Buffer.alloc(32, 2).toString('base64'),
 };
 
 describe('buildApp redis onClose', () => {

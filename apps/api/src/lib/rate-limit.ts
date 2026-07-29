@@ -72,6 +72,9 @@ export async function enforceTransactionCreateLimit(options: {
       'X-RateLimit-Remaining',
       String(Math.max(0, TRANSACTION_CREATE_LIMIT_PER_MINUTE - count)),
     );
+    const windowEnd =
+      (Math.floor(Date.now() / (WINDOW_SECONDS * 1000)) + 1) * WINDOW_SECONDS;
+    reply.header('X-RateLimit-Reset', String(windowEnd));
     return true;
   } catch (error) {
     request.log.error({ err: error }, 'Transaction rate limiter unavailable');
@@ -125,6 +128,9 @@ export async function enforceRateLimit(options: {
 
     reply.header('X-RateLimit-Limit', String(limit));
     reply.header('X-RateLimit-Remaining', String(Math.max(0, limit - maxCount)));
+    const windowEnd =
+      (Math.floor(Date.now() / (WINDOW_SECONDS * 1000)) + 1) * WINDOW_SECONDS;
+    reply.header('X-RateLimit-Reset', String(windowEnd));
     return true;
   } catch (error) {
     request.log.error({ err: error }, 'Rate limiter unavailable');

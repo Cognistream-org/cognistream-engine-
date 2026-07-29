@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-const apiKey = process.env.E2E_API_KEY || 'cs_demo_e2e_key_000000000000';
+const apiKey = process.env.E2E_API_KEY;
+if (!apiKey) {
+  throw new Error('E2E_API_KEY environment variable is required for e2e tests');
+}
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
