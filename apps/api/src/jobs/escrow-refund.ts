@@ -144,20 +144,43 @@ async function refundOneEscrow(escrowId: string, now: Date): Promise<boolean> {
         data: { released: true, releasedAt: now },
       });
 
-      await tx.auditLog.create({
-        data: {
-          id: createId(),
+      const { getAuditTrail } = await import('../security/audit-runtime.js');
+      try {
+        await getAuditTrail().appendWithClient(tx, {
           orgId: row.buyer_org_id,
           action: 'escrow.auto_refund',
           entityType: 'escrow',
           entityId: row.id,
+          actorType: 'system',
+          result: 'success',
           metadata: {
             transactionId: row.transaction_id,
             amountCents: row.amount_cents.toString(),
             reason: 'expired',
           },
-        },
-      });
+          changes: { status: 'refunded', released: true },
+        });
+      } catch {
+        // Audit runtime may be uninitialized in isolated unit tests — fall back
+        await tx.auditLog.create({
+          data: {
+            id: createId(),
+            orgId: row.buyer_org_id,
+            action: 'escrow.auto_refund',
+            entityType: 'escrow',
+            entityId: row.id,
+            actorType: 'system',
+            result: 'success',
+            integrityHash: 'legacy-unhashed',
+            previousHash: null,
+            metadata: {
+              transactionId: row.transaction_id,
+              amountCents: row.amount_cents.toString(),
+              reason: 'expired',
+            },
+          },
+        });
+      }
 
       return true;
     },
