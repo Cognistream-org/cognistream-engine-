@@ -20,6 +20,7 @@ import { apiKeyRoutes } from './routes/api-keys.js';
 import { transactionRoutes } from './routes/transactions.js';
 import { disputeRoutes } from './routes/disputes.js';
 import { overviewRoutes } from './routes/overview.js';
+import { stripeWebhookRoutes } from './routes/stripe-webhooks.js';
 import { initAuditRuntime, stopAuditRuntime } from './security/audit-runtime.js';
 
 declare module 'fastify' {
@@ -88,6 +89,11 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
   await app.register(transactionRoutes, { prefix: '/v1' });
   await app.register(disputeRoutes, { prefix: '/v1' });
   await app.register(overviewRoutes, { prefix: '/v1' });
+  await app.register(stripeWebhookRoutes, {
+    prefix: '/v1',
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    stripeSecretKey: env.STRIPE_SECRET_KEY,
+  });
 
   return app as unknown as FastifyInstance;
 }
