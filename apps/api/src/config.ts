@@ -34,16 +34,42 @@ const envSchema = z.object({
   APP_VERSION: z.string().default('0.1.0'),
   ENCRYPTION_KEYS: z.string().min(1).optional(),
   AUDIT_HMAC_KEY: z.string().min(1).optional(),
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
+  PLATFORM_FEE_DEFAULT_BASIS_POINTS: z.coerce.number().int().min(0).max(10000).default(250),
+  PLATFORM_NAME: z.string().default('CogniStream'),
+  PLATFORM_URL: z.string().url().default('https://cognistream.io'),
+  BILLING_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(3),
+  TRIAL_DAYS: z.coerce.number().int().min(0).default(14),
 });
 
 export type Env = z.infer<typeof envSchema> & {
   ENCRYPTION_KEYS: string;
   AUDIT_HMAC_KEY: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PUBLISHABLE_KEY: string;
 };
 
 function ephemeralTestKey(prefix: string): string {
   // Deterministic-enough per process; not a production secret.
   return `${prefix}:${randomBytes(32).toString('base64')}`;
+}
+
+function requireOutsideTest(
+  value: string | undefined,
+  name: string,
+  nodeEnv: string,
+  testFallback: string,
+): string {
+  if (value) {
+    return value;
+  }
+  if (nodeEnv === 'test') {
+    return testFallback;
+  }
+  throw new Error(`Invalid environment configuration: ${name}: Required`);
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -56,32 +82,44 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
 
   const data = parsed.data;
-  let encryptionKeys = data.ENCRYPTION_KEYS;
-  let auditHmacKey = data.AUDIT_HMAC_KEY;
 
-  if (!encryptionKeys) {
-    if (data.NODE_ENV === 'test') {
-      encryptionKeys = ephemeralTestKey('test');
-    } else {
-      throw new Error(
-        'Invalid environment configuration: ENCRYPTION_KEYS: Required',
-      );
-    }
-  }
-
-  if (!auditHmacKey) {
-    if (data.NODE_ENV === 'test') {
-      auditHmacKey = randomBytes(32).toString('base64');
-    } else {
-      throw new Error(
-        'Invalid environment configuration: AUDIT_HMAC_KEY: Required',
-      );
-    }
-  }
+  const encryptionKeys = requireOutsideTest(
+    data.ENCRYPTION_KEYS,
+    'ENCRYPTION_KEYS',
+    data.NODE_ENV,
+    ephemeralTestKey('test'),
+  );
+  const auditHmacKey = requireOutsideTest(
+    data.AUDIT_HMAC_KEY,
+    'AUDIT_HMAC_KEY',
+    data.NODE_ENV,
+    randomBytes(32).toString('base64'),
+  );
+  const stripeSecretKey = requireOutsideTest(
+    data.STRIPE_SECRET_KEY,
+    'STRIPE_SECRET_KEY',
+    data.NODE_ENV,
+    'sk_test_placeholder',
+  );
+  const stripeWebhookSecret = requireOutsideTest(
+    data.STRIPE_WEBHOOK_SECRET,
+    'STRIPE_WEBHOOK_SECRET',
+    data.NODE_ENV,
+    'whsec_test_placeholder',
+  );
+  const stripePublishableKey = requireOutsideTest(
+    data.STRIPE_PUBLISHABLE_KEY,
+    'STRIPE_PUBLISHABLE_KEY',
+    data.NODE_ENV,
+    'pk_test_placeholder',
+  );
 
   return {
     ...data,
     ENCRYPTION_KEYS: encryptionKeys,
     AUDIT_HMAC_KEY: auditHmacKey,
+    STRIPE_SECRET_KEY: stripeSecretKey,
+    STRIPE_WEBHOOK_SECRET: stripeWebhookSecret,
+    STRIPE_PUBLISHABLE_KEY: stripePublishableKey,
   };
 }

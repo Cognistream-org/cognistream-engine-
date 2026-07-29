@@ -41,6 +41,14 @@ const env: Env = {
   APP_VERSION: '0.1.0-test',
   ENCRYPTION_KEYS: `test:${Buffer.alloc(32, 1).toString('base64')}`,
   AUDIT_HMAC_KEY: Buffer.alloc(32, 2).toString('base64'),
+  STRIPE_SECRET_KEY: 'sk_test_placeholder',
+  STRIPE_WEBHOOK_SECRET: 'whsec_test_placeholder',
+  STRIPE_PUBLISHABLE_KEY: 'pk_test_placeholder',
+  PLATFORM_FEE_DEFAULT_BASIS_POINTS: 250,
+  PLATFORM_NAME: 'CogniStream',
+  PLATFORM_URL: 'https://cognistream.io',
+  BILLING_GRACE_PERIOD_DAYS: 3,
+  TRIAL_DAYS: 14,
 };
 
 describe('buildApp redis onClose', () => {
