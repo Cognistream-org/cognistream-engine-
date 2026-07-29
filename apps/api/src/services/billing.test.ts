@@ -10,6 +10,7 @@ const subscriptionsUpdate = vi.fn();
 const subscriptionsRetrieve = vi.fn();
 const subscriptionsCancel = vi.fn();
 const portalCreate = vi.fn();
+const checkoutSessionsCreate = vi.fn();
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
@@ -25,6 +26,8 @@ vi.mock('../lib/prisma.js', () => ({
     usageRecord: {
       create: vi.fn(),
     },
+    invoice: { count: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
   },
 }));
 
@@ -39,6 +42,7 @@ vi.mock('../lib/stripe.js', () => ({
       cancel: subscriptionsCancel,
     },
     billingPortal: { sessions: { create: portalCreate } },
+    checkout: { sessions: { create: checkoutSessionsCreate } },
   })),
 }));
 
@@ -59,10 +63,15 @@ import {
   cancelSubscription,
   changeTier,
   checkLimits,
+  createCheckoutSession,
   createPortalSession,
   createSubscription,
   flushUsageToDatabase,
+  getBillingProfile,
+  getInvoice,
+  getLimits,
   getUsageSummary,
+  listInvoices,
   recordApiCall,
   recordTransaction,
   recordAgentCreated,
@@ -779,5 +788,239 @@ describe('billing service — coverage gaps', () => {
         }),
       }),
     );
+  });
+});
+
+describe('billing service — checkout + profile + invoices', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetBillingBreakers();
+    customersCreate.mockResolvedValue({ id: 'cus_new' });
+    checkoutSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/c/1' });
+  });
+
+  it('createCheckoutSession rejects free tier', async () => {
+    await expect(
+      createCheckoutSession(orgId, 'free', 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('createCheckoutSession rejects unknown tier', async () => {
+    await expect(
+      createCheckoutSession(orgId, 'not-a-tier' as never, 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('createCheckoutSession rejects missing org', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue(null);
+    await expect(
+      createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('creates customer + checkout session when no stripeCustomerId', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue(null);
+    customersCreate.mockResolvedValue({ id: 'cus_new' });
+    checkoutSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/c/1' });
+
+    const result = await createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel');
+    expect(result).toEqual({ url: 'https://checkout.stripe.com/c/1', sessionId: 'cs_1' });
+    expect(customersCreate).toHaveBeenCalled();
+    expect(checkoutSessionsCreate).toHaveBeenCalled();
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'billing.checkout_created' }),
+    );
+  });
+
+  it('updates subscription with customer id when existing subscription lacks customer', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({ stripeCustomerId: null } as never);
+    vi.mocked(prisma.subscription.update).mockResolvedValue({ id: subscriptionId } as never);
+    customersCreate.mockResolvedValue({ id: 'cus_new' });
+    checkoutSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/c/1' });
+
+    await createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel');
+    expect(prisma.subscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { orgId },
+        data: { stripeCustomerId: 'cus_new' },
+      }),
+    );
+  });
+
+  it('yearly cycle uses yearlyPriceCents', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({
+      stripeCustomerId: 'cus_123',
+    } as never);
+    checkoutSessionsCreate.mockResolvedValue({ id: 'cs_y', url: 'https://checkout.stripe.com/c/y' });
+
+    await createCheckoutSession(orgId, 'developer', 'yearly', 'https://ok', 'https://cancel');
+    expect(checkoutSessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [
+          expect.objectContaining({
+            price_data: expect.objectContaining({
+              unit_amount: PRICING_TIERS.developer.yearlyPriceCents,
+              recurring: { interval: 'year' },
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('missing session.url throws BillingStripeError', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({
+      stripeCustomerId: 'cus_123',
+    } as never);
+    checkoutSessionsCreate.mockResolvedValue({ id: 'cs_1', url: null });
+
+    await expect(
+      createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toBeInstanceOf(BillingStripeError);
+  });
+
+  it('Stripe API error becomes BillingStripeError', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({
+      stripeCustomerId: 'cus_123',
+    } as never);
+    checkoutSessionsCreate.mockRejectedValue(new Error('stripe checkout boom'));
+
+    await expect(
+      createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toBeInstanceOf(BillingStripeError);
+  });
+
+  it('AppError from Stripe path is rethrown', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue(null);
+    customersCreate.mockRejectedValue(new AppError('VALIDATION_ERROR', 'bad customer', 422, 'req-1'));
+
+    await expect(
+      createCheckoutSession(orgId, 'developer', 'monthly', 'https://ok', 'https://cancel'),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: 'bad customer' });
+  });
+
+  it('getBillingProfile org not found → AppError NOT_FOUND', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue(null);
+    await expect(getBillingProfile(orgId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('getBillingProfile happy path with subscription', async () => {
+    vi.mocked(prisma.organization.findUnique).mockResolvedValue({
+      id: orgId,
+      name: 'Acme',
+      slug: 'acme',
+      tier: 'developer',
+      balanceCents: 0n,
+    } as never);
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue(baseSubscription as never);
+
+    const profile = await getBillingProfile(orgId);
+    expect(profile.organization.id).toBe(orgId);
+    expect(profile.subscription?.tier).toBe('developer');
+    expect(profile.pricing).toEqual(PRICING_TIERS.developer);
+  });
+
+  it('getLimits returns softLimitRatio 0.8 and hardLimitRatio 1.2 for developer', async () => {
+    const { redis } = createMemoryRedis();
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({ tier: 'developer' } as never);
+
+    const limits = await getLimits(orgId, { redis });
+    expect(limits.tier).toBe('developer');
+    expect(limits.softLimitRatio).toBe(0.8);
+    expect(limits.hardLimitRatio).toBe(1.2);
+    expect(limits.limits).toEqual(PRICING_TIERS.developer.limits);
+  });
+
+  it('getLimits free tier hardLimitRatio 1.0', async () => {
+    const { redis } = createMemoryRedis();
+    vi.mocked(prisma.subscription.findUnique).mockResolvedValue({ tier: 'free' } as never);
+
+    const limits = await getLimits(orgId, { redis });
+    expect(limits.tier).toBe('free');
+    expect(limits.softLimitRatio).toBe(0.8);
+    expect(limits.hardLimitRatio).toBe(1.0);
+  });
+
+  it('listInvoices returns items via $transaction mock', async () => {
+    const invoiceRow = {
+      id: 'inv_1',
+      orgId,
+      subscriptionId: null,
+      stripeInvoiceId: null,
+      invoiceNumber: 'INV-1',
+      status: 'paid',
+      amountDueCents: 4900n,
+      amountPaidCents: 4900n,
+      currency: 'usd',
+      pdfUrl: null,
+      hostedUrl: null,
+      dueDate: null,
+      paidAt: null,
+      lineItems: [],
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+    };
+    vi.mocked(prisma.invoice.count).mockResolvedValue(1);
+    vi.mocked(prisma.invoice.findMany).mockResolvedValue([invoiceRow] as never);
+
+    const result = await listInvoices(orgId, { page: 1, limit: 10 });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(result.total).toBe(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.invoiceNumber).toBe('INV-1');
+    expect(result.page).toBe(1);
+    expect(result.limit).toBe(10);
+  });
+
+  it('getInvoice returns invoice', async () => {
+    const invoiceRow = {
+      id: 'inv_1',
+      orgId,
+      invoiceNumber: 'INV-1',
+      status: 'open',
+      amountDueCents: 100n,
+      amountPaidCents: 0n,
+      currency: 'usd',
+    };
+    vi.mocked(prisma.invoice.findFirst).mockResolvedValue(invoiceRow as never);
+
+    const invoice = await getInvoice(orgId, 'inv_1');
+    expect(invoice.id).toBe('inv_1');
+    expect(invoice.invoiceNumber).toBe('INV-1');
+  });
+
+  it('getInvoice missing → BillingNotFoundError', async () => {
+    vi.mocked(prisma.invoice.findFirst).mockResolvedValue(null);
+    await expect(getInvoice(orgId, 'missing')).rejects.toBeInstanceOf(BillingNotFoundError);
   });
 });

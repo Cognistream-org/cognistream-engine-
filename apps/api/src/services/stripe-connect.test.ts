@@ -5,6 +5,7 @@ import type Stripe from 'stripe';
 const accountsCreate = vi.fn();
 const accountLinksCreate = vi.fn();
 const transfersCreate = vi.fn();
+const accountsDel = vi.fn();
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
@@ -13,6 +14,7 @@ vi.mock('../lib/prisma.js', () => ({
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      delete: vi.fn(),
     },
     platformFeeLedger: {
       findUnique: vi.fn(),
@@ -23,7 +25,7 @@ vi.mock('../lib/prisma.js', () => ({
 
 vi.mock('../lib/stripe.js', () => ({
   getStripeClient: vi.fn(() => ({
-    accounts: { create: accountsCreate },
+    accounts: { create: accountsCreate, del: accountsDel },
     accountLinks: { create: accountLinksCreate },
     transfers: { create: transfersCreate },
   })),
@@ -48,6 +50,8 @@ import {
   createAccount,
   createOnboardingLink,
   createTransfer,
+  disconnectAccount,
+  getConnectAccountOrNull,
   handleAccountUpdated,
   mapStripeAccountStatus,
   resetStripeConnectBreakers,
@@ -543,5 +547,68 @@ describe('createTransfer', () => {
 
     await expect(createTransfer(params)).resolves.toBe('tr_orphan');
     expect(recordAudit).toHaveBeenCalled();
+  });
+
+  it('rejects amountCents exceeding MAX_SAFE_INTEGER', async () => {
+    await expect(
+      createTransfer({
+        ...params,
+        amountCents: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(transfersCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('getConnectAccountOrNull', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null when findUnique returns null', async () => {
+    vi.mocked(prisma.stripeConnectAccount.findUnique).mockResolvedValue(null);
+    await expect(getConnectAccountOrNull(orgId)).resolves.toBeNull();
+  });
+
+  it('returns row when present', async () => {
+    vi.mocked(prisma.stripeConnectAccount.findUnique).mockResolvedValue(baseRow as never);
+    await expect(getConnectAccountOrNull(orgId)).resolves.toEqual(baseRow);
+  });
+});
+
+describe('disconnectAccount', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStripeConnectBreakers();
+  });
+
+  it('throws StripeConnectError when accountsDel fails before delete', async () => {
+    vi.mocked(prisma.stripeConnectAccount.findUnique).mockResolvedValue(baseRow as never);
+    accountsDel.mockRejectedValue(new Error('del fail'));
+
+    await expect(disconnectAccount(orgId)).rejects.toBeInstanceOf(StripeConnectError);
+    expect(prisma.stripeConnectAccount.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes row and audits when Stripe succeeds', async () => {
+    vi.mocked(prisma.stripeConnectAccount.findUnique).mockResolvedValue(baseRow as never);
+    accountsDel.mockResolvedValue({ id: stripeAccountId, deleted: true });
+    vi.mocked(prisma.stripeConnectAccount.delete).mockResolvedValue({ id: accountId } as never);
+
+    await disconnectAccount(orgId);
+
+    expect(accountsDel).toHaveBeenCalledWith(stripeAccountId);
+    expect(prisma.stripeConnectAccount.delete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: accountId },
+      }),
+    );
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'stripe_connect.account_disconnected',
+        result: 'success',
+        entityId: accountId,
+      }),
+    );
   });
 });
