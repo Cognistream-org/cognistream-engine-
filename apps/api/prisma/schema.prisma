@@ -51,6 +51,12 @@ model Organization {
   webhooks  Webhook[]
   auditLogs AuditLog[]
 
+  stripeConnectAccount StripeConnectAccount?
+  subscription         Subscription?
+  invoices             Invoice[]
+  usageRecords         UsageRecord[]
+  platformFeeLedgers   PlatformFeeLedger[]
+
   @@map("organizations")
 }
 
@@ -118,6 +124,8 @@ model Transaction {
   dispute Dispute?
   buyer   Agent    @relation("BuyerTransactions", fields: [buyerId], references: [id])
   seller  Agent    @relation("SellerTransactions", fields: [sellerId], references: [id])
+
+  platformFeeLedger PlatformFeeLedger?
 
   @@index([buyerId, createdAt])
   @@index([sellerId, status])
@@ -212,4 +220,151 @@ model Webhook {
 
   @@index([orgId, active])
   @@map("webhooks")
+}
+
+enum StripeConnectStatus {
+  pending
+  onboarding
+  active
+  restricted
+  rejected
+}
+
+model StripeConnectAccount {
+  id                     String              @id @db.Uuid
+  orgId                  String              @unique @map("org_id") @db.Uuid
+  stripeAccountId        String              @unique @map("stripe_account_id") @db.VarChar(255)
+  status                 StripeConnectStatus @default(pending)
+  chargesEnabled         Boolean             @default(false) @map("charges_enabled")
+  payoutsEnabled         Boolean             @default(false) @map("payouts_enabled")
+  onboardingUrl          String?             @map("onboarding_url") @db.Text
+  onboardingUrlExpiresAt DateTime?           @map("onboarding_url_expires_at") @db.Timestamptz(3)
+  defaultCurrency        String              @default("usd") @map("default_currency") @db.VarChar(3)
+  country                String              @default("us") @map("country") @db.VarChar(2)
+  requirementsJson       Json?               @map("requirements_json")
+  createdAt              DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([stripeAccountId])
+  @@index([status, chargesEnabled])
+  @@map("stripe_connect_accounts")
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  canceled
+  unpaid
+  paused
+}
+
+model Subscription {
+  id                   String             @id @db.Uuid
+  orgId                String             @unique @map("org_id") @db.Uuid
+  stripeSubscriptionId String?            @unique @map("stripe_subscription_id") @db.VarChar(255)
+  stripeCustomerId     String?            @map("stripe_customer_id") @db.VarChar(255)
+  tier                 OrganizationTier
+  status               SubscriptionStatus @default(trialing)
+  trialEndsAt          DateTime?          @map("trial_ends_at") @db.Timestamptz(3)
+  currentPeriodStart   DateTime           @map("current_period_start") @db.Timestamptz(3)
+  currentPeriodEnd     DateTime           @map("current_period_end") @db.Timestamptz(3)
+  cancelAtPeriodEnd    Boolean            @default(false) @map("cancel_at_period_end")
+  canceledAt           DateTime?          @map("canceled_at") @db.Timestamptz(3)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+  usageRecords UsageRecord[]
+
+  @@index([orgId, status])
+  @@index([stripeSubscriptionId])
+  @@map("subscriptions")
+}
+
+enum InvoiceStatus {
+  draft
+  open
+  paid
+  void
+  uncollectible
+}
+
+model Invoice {
+  id              String        @id @db.Uuid
+  orgId           String        @map("org_id") @db.Uuid
+  subscriptionId  String?       @map("subscription_id") @db.Uuid
+  stripeInvoiceId String?       @unique @map("stripe_invoice_id") @db.VarChar(255)
+  invoiceNumber   String        @unique @map("invoice_number") @db.VarChar(32)
+  status          InvoiceStatus @default(draft)
+  amountDueCents  BigInt        @map("amount_due_cents")
+  amountPaidCents BigInt        @default(0) @map("amount_paid_cents")
+  currency        String        @default("usd") @map("currency") @db.VarChar(3)
+  pdfUrl          String?       @map("pdf_url") @db.Text
+  hostedUrl       String?       @map("hosted_url") @db.Text
+  dueDate         DateTime?     @map("due_date") @db.Timestamptz(3)
+  paidAt          DateTime?     @map("paid_at") @db.Timestamptz(3)
+  lineItems       Json          @map("line_items")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([orgId, status])
+  @@index([invoiceNumber])
+  @@map("invoices")
+}
+
+enum UsageMeterType {
+  api_calls
+  transactions
+  transaction_volume_cents
+  agents
+  webhooks
+  disputes
+}
+
+model UsageRecord {
+  id             String         @id @db.Uuid
+  orgId          String         @map("org_id") @db.Uuid
+  subscriptionId String         @map("subscription_id") @db.Uuid
+  meterType      UsageMeterType @map("meter_type")
+  quantity       Int            @default(0)
+  amountCents    BigInt?        @map("amount_cents")
+  billingPeriod  String         @map("billing_period") @db.VarChar(7)
+  source         String         @map("source") @db.VarChar(32)
+  sourceId       String?        @map("source_id") @db.Uuid
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([orgId, billingPeriod, meterType])
+  @@index([subscriptionId, billingPeriod])
+  @@map("usage_records")
+}
+
+/// Platform take on each transaction (integer cents only).
+model PlatformFeeLedger {
+  id               String    @id @db.Uuid
+  transactionId    String    @unique @map("transaction_id") @db.Uuid
+  orgId            String    @map("org_id") @db.Uuid
+  grossAmountCents BigInt    @map("gross_amount_cents")
+  platformFeeCents BigInt    @map("platform_fee_cents")
+  netAmountCents   BigInt    @map("net_amount_cents")
+  feeBasisPoints   Int       @map("fee_basis_points")
+  stripeTransferId String?   @map("stripe_transfer_id") @db.VarChar(255)
+  transferredAt    DateTime? @map("transferred_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transaction Transaction  @relation(fields: [transactionId], references: [id])
+
+  @@index([orgId, createdAt])
+  @@index([transactionId])
+  @@map("platform_fee_ledger")
 }
