@@ -72,4 +72,28 @@ export {
   type DisputeResponse,
 } from './dispute.js';
 
+export {
+  BillingCycleSchema,
+  CheckoutBodySchema,
+  PortalQuerySchema,
+  ChangeTierBodySchema,
+  ListInvoicesQuerySchema,
+  InvoiceIdParamsSchema,
+  CreateConnectAccountBodySchema,
+  ConnectOnboardingBodySchema,
+  SubscriptionResponseSchema,
+  InvoiceResponseSchema,
+  StripeConnectAccountResponseSchema,
+  type BillingCycle,
+  type CheckoutBody,
+  type PortalQuery,
+  type ChangeTierBody,
+  type ListInvoicesQuery,
+  type SubscriptionResponse,
+  type InvoiceResponse,
+  type StripeConnectAccountResponse,
+  type CreateConnectAccountBody,
+  type ConnectOnboardingBody,
+} from './billing.js';
+
 export { ValidationErrorSchema, formatZodError } from './validation.js';

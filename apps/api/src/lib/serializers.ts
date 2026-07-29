@@ -4,6 +4,9 @@ import type {
   CreatedApiKey,
   DisputeResponse,
   EscrowResponse,
+  InvoiceResponse,
+  StripeConnectAccountResponse,
+  SubscriptionResponse,
   TransactionAgentSummary,
   TransactionResponse,
 } from '@cognistream/shared';
@@ -12,6 +15,8 @@ import type { AgentRow } from '../services/agents.js';
 import type { ApiKeyMetadataRow, ApiKeyRow } from '../services/api-keys.js';
 import type { TransactionDetail } from '../services/transactions.js';
 import type { DisputeDetail } from '../services/disputes.js';
+import type { SubscriptionRow } from '../services/billing.js';
+import type { StripeConnectAccountRow } from '../services/stripe-connect.js';
 
 export function toAgentResponse(agent: AgentRow): AgentResponse {
   return {
@@ -144,5 +149,80 @@ export function toDisputeResponse(dispute: DisputeDetail): DisputeResponse {
     resolution: dispute.resolution,
     resolvedAt: dispute.resolvedAt?.toISOString() ?? null,
     createdAt: dispute.createdAt.toISOString(),
+  };
+}
+
+export function toSubscriptionResponse(row: SubscriptionRow): SubscriptionResponse {
+  return {
+    id: row.id,
+    orgId: row.orgId,
+    tier: row.tier,
+    status: row.status,
+    stripeSubscriptionId: row.stripeSubscriptionId,
+    stripeCustomerId: row.stripeCustomerId,
+    trialEndsAt: row.trialEndsAt?.toISOString() ?? null,
+    currentPeriodStart: row.currentPeriodStart.toISOString(),
+    currentPeriodEnd: row.currentPeriodEnd.toISOString(),
+    cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+    canceledAt: row.canceledAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toInvoiceResponse(row: {
+  id: string;
+  orgId: string;
+  subscriptionId: string | null;
+  stripeInvoiceId: string | null;
+  invoiceNumber: string;
+  status: string;
+  amountDueCents: bigint;
+  amountPaidCents: bigint;
+  currency: string;
+  pdfUrl: string | null;
+  hostedUrl: string | null;
+  dueDate: Date | null;
+  paidAt: Date | null;
+  lineItems: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}): InvoiceResponse {
+  return {
+    id: row.id,
+    orgId: row.orgId,
+    subscriptionId: row.subscriptionId,
+    stripeInvoiceId: row.stripeInvoiceId,
+    invoiceNumber: row.invoiceNumber,
+    status: row.status,
+    amountDueCents: row.amountDueCents.toString(),
+    amountPaidCents: row.amountPaidCents.toString(),
+    currency: row.currency,
+    pdfUrl: row.pdfUrl,
+    hostedUrl: row.hostedUrl,
+    dueDate: row.dueDate?.toISOString() ?? null,
+    paidAt: row.paidAt?.toISOString() ?? null,
+    lineItems: row.lineItems,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toStripeConnectAccountResponse(
+  row: StripeConnectAccountRow,
+): StripeConnectAccountResponse {
+  return {
+    id: row.id,
+    orgId: row.orgId,
+    stripeAccountId: row.stripeAccountId,
+    status: row.status,
+    chargesEnabled: row.chargesEnabled,
+    payoutsEnabled: row.payoutsEnabled,
+    onboardingUrl: row.onboardingUrl,
+    onboardingUrlExpiresAt: row.onboardingUrlExpiresAt?.toISOString() ?? null,
+    defaultCurrency: row.defaultCurrency,
+    country: row.country,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }

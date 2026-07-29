@@ -129,6 +129,141 @@ export type DisputeFilters = {
   limit?: number;
 };
 
+export type OrganizationTier = 'free' | 'developer' | 'enterprise';
+export type BillingCycle = 'monthly' | 'yearly';
+
+export type Subscription = {
+  id: string;
+  orgId: string;
+  tier: OrganizationTier;
+  status: string;
+  stripeSubscriptionId: string | null;
+  stripeCustomerId: string | null;
+  trialEndsAt: string | null;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Invoice = {
+  id: string;
+  orgId: string;
+  subscriptionId: string | null;
+  stripeInvoiceId: string | null;
+  invoiceNumber: string;
+  status: string;
+  amountDueCents: string;
+  amountPaidCents: string;
+  currency: string;
+  pdfUrl: string | null;
+  hostedUrl: string | null;
+  dueDate: string | null;
+  paidAt: string | null;
+  lineItems: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BillingPricing = {
+  name: string;
+  monthlyPriceCents: number;
+  yearlyPriceCents: number;
+  limits: Record<string, number>;
+  features: Record<string, boolean>;
+  platformFeeBasisPoints: number;
+  overage: { apiCallCents: number; transactionCents: number } | null;
+};
+
+export type BillingProfile = {
+  organization: {
+    id: string;
+    name: string;
+    slug: string;
+    tier: OrganizationTier;
+    balanceCents: string;
+  };
+  subscription: Subscription | null;
+  pricing: BillingPricing;
+};
+
+export type CheckoutParams = {
+  tier: Exclude<OrganizationTier, 'free'>;
+  cycle?: BillingCycle;
+  successUrl: string;
+  cancelUrl: string;
+  idempotencyKey?: string;
+};
+
+export type CheckoutSession = {
+  url: string;
+  sessionId: string;
+};
+
+export type PortalParams = {
+  returnUrl: string;
+};
+
+export type ChangeTierParams = {
+  tier: OrganizationTier;
+  cycle?: BillingCycle;
+  idempotencyKey?: string;
+};
+
+export type UsageMeter = {
+  usage: number;
+  limit: number;
+  hardLimit: number;
+};
+
+export type UsageSummary = {
+  orgId: string;
+  billingPeriod: string;
+  tier: OrganizationTier;
+  meters: Record<string, UsageMeter>;
+};
+
+export type BillingLimits = {
+  tier: OrganizationTier;
+  limits: Record<string, number>;
+  usage: Record<string, UsageMeter>;
+  softLimitRatio: number;
+  hardLimitRatio: number;
+};
+
+export type InvoiceFilters = {
+  page?: number;
+  limit?: number;
+};
+
+export type StripeConnectAccount = {
+  id: string;
+  orgId: string;
+  stripeAccountId: string;
+  status: string;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  onboardingUrl: string | null;
+  onboardingUrlExpiresAt: string | null;
+  defaultCurrency: string;
+  country: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateConnectAccountParams = {
+  country: string;
+  idempotencyKey?: string;
+};
+
+export type ConnectOnboardingParams = {
+  returnUrl: string;
+  refreshUrl: string;
+  idempotencyKey?: string;
+};
+
 export type StreamEvent =
   | 'transaction.created'
   | 'transaction.settled'

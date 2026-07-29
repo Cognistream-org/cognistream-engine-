@@ -2,6 +2,9 @@ import type {
   AgentResponse,
   ApiKeyMetadata,
   CreatedApiKey,
+  InvoiceResponse,
+  StripeConnectAccountResponse,
+  SubscriptionResponse,
   TransactionResponse,
 } from '@cognistream/shared';
 
@@ -32,6 +35,41 @@ export interface OverviewResponse {
   };
 }
 
+export interface BillingProfileResponse {
+  organization: {
+    id: string;
+    name: string;
+    slug: string;
+    tier: string;
+    balanceCents: string;
+  };
+  subscription: SubscriptionResponse | null;
+  pricing: {
+    name: string;
+    monthlyPriceCents: number;
+    yearlyPriceCents: number;
+    limits: Record<string, number>;
+    features: Record<string, boolean>;
+    platformFeeBasisPoints: number;
+    overage: { apiCallCents: number; transactionCents: number } | null;
+  };
+}
+
+export interface UsageSummaryResponse {
+  orgId: string;
+  billingPeriod: string;
+  tier: string;
+  meters: Record<string, { usage: number; limit: number; hardLimit: number }>;
+}
+
+export interface BillingLimitsResponse {
+  tier: string;
+  limits: Record<string, number>;
+  usage: Record<string, { usage: number; limit: number; hardLimit: number }>;
+  softLimitRatio: number;
+  hardLimitRatio: number;
+}
+
 /** Client-side fetch via BFF proxy (reads httpOnly session cookie server-side). */
 export function proxyUrl(path: string): string {
   const normalized = path.startsWith('/') ? path.slice(1) : path;
@@ -56,12 +94,17 @@ export async function clientFetch<T>(path: string, init?: RequestInit): Promise<
     throw new Error(message);
   }
 
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
   return res.json() as Promise<T>;
 }
 
 export type AgentsListResponse = PaginatedResponse<AgentResponse>;
 export type TransactionsListResponse = PaginatedResponse<TransactionResponse>;
 export type ApiKeysListResponse = PaginatedResponse<ApiKeyMetadata>;
+export type InvoicesListResponse = PaginatedResponse<InvoiceResponse>;
 
 export interface TransactionDetailResponse {
   transaction: TransactionResponse;
@@ -122,4 +165,62 @@ export async function releaseEscrow(id: string): Promise<ReleaseEscrowResponse> 
     method: 'POST',
     body: JSON.stringify({}),
   });
+}
+
+export async function fetchBillingProfile(): Promise<BillingProfileResponse> {
+  return clientFetch<BillingProfileResponse>('v1/billing/profile');
+}
+
+export async function fetchBillingUsage(): Promise<UsageSummaryResponse> {
+  return clientFetch<UsageSummaryResponse>('v1/billing/usage');
+}
+
+export async function fetchBillingLimits(): Promise<BillingLimitsResponse> {
+  return clientFetch<BillingLimitsResponse>('v1/billing/limits');
+}
+
+export async function fetchInvoices(
+  params?: Record<string, string>,
+): Promise<InvoicesListResponse> {
+  const qs = params ? `?${new URLSearchParams(params)}` : '';
+  return clientFetch<InvoicesListResponse>(`v1/billing/invoices${qs}`);
+}
+
+export async function createCheckoutSession(body: {
+  tier: 'developer' | 'enterprise';
+  cycle?: 'monthly' | 'yearly';
+  successUrl: string;
+  cancelUrl: string;
+}): Promise<{ url: string; sessionId: string }> {
+  return clientFetch<{ url: string; sessionId: string }>('v1/billing/checkout', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function fetchStripeConnect(): Promise<StripeConnectAccountResponse> {
+  return clientFetch<StripeConnectAccountResponse>('v1/stripe/connect');
+}
+
+export async function createStripeConnect(body: {
+  country: string;
+}): Promise<StripeConnectAccountResponse> {
+  return clientFetch<StripeConnectAccountResponse>('v1/stripe/connect', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function createConnectOnboarding(body: {
+  returnUrl: string;
+  refreshUrl: string;
+}): Promise<{ url: string }> {
+  return clientFetch<{ url: string }>('v1/stripe/connect/onboarding', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function disconnectStripeConnect(): Promise<void> {
+  return clientFetch<void>('v1/stripe/connect', { method: 'DELETE' });
 }

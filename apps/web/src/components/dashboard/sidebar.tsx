@@ -8,6 +8,7 @@ import {
   ArrowLeftRight,
   KeyRound,
   Settings,
+  CreditCard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useRealtime } from '@/hooks/use-realtime';
@@ -16,6 +17,7 @@ const navItems = [
   { href: '/dashboard/overview', label: 'Overview', icon: LayoutDashboard },
   { href: '/dashboard/agents', label: 'Agents', icon: Bot },
   { href: '/dashboard/transactions', label: 'Transactions', icon: ArrowLeftRight },
+  { href: '/dashboard/billing', label: 'Billing', icon: CreditCard },
   { href: '/dashboard/api-keys', label: 'API Keys', icon: KeyRound },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];

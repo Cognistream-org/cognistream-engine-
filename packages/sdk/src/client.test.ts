@@ -108,6 +108,164 @@ const server = setupServer(
       meta: { page: 1, limit: 20, total: 0, totalPages: 1 },
     }),
   ),
+  http.get(`${BASE}/v1/billing/profile`, () =>
+    HttpResponse.json({
+      organization: {
+        id: 'org-1',
+        name: 'Acme',
+        slug: 'acme',
+        tier: 'free',
+        balanceCents: '1000',
+      },
+      subscription: null,
+      pricing: {
+        name: 'Free',
+        monthlyPriceCents: 0,
+        yearlyPriceCents: 0,
+        limits: { agents: 3 },
+        features: { escrow: true },
+        platformFeeBasisPoints: 350,
+        overage: { apiCallCents: 1, transactionCents: 10 },
+      },
+    }),
+  ),
+  http.post(`${BASE}/v1/billing/checkout`, () =>
+    HttpResponse.json({ url: 'https://checkout.stripe.test/cs_1', sessionId: 'cs_1' }),
+  ),
+  http.get(`${BASE}/v1/billing/subscription`, () =>
+    HttpResponse.json({
+      id: 'sub-1',
+      orgId: 'org-1',
+      tier: 'developer',
+      status: 'active',
+      stripeSubscriptionId: 'stripe_sub_1',
+      stripeCustomerId: 'cus_1',
+      trialEndsAt: null,
+      currentPeriodStart: '2026-07-01T00:00:00.000Z',
+      currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+      cancelAtPeriodEnd: false,
+      canceledAt: null,
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    }),
+  ),
+  http.patch(`${BASE}/v1/billing/subscription`, () =>
+    HttpResponse.json({
+      id: 'sub-1',
+      orgId: 'org-1',
+      tier: 'enterprise',
+      status: 'active',
+      stripeSubscriptionId: 'stripe_sub_1',
+      stripeCustomerId: 'cus_1',
+      trialEndsAt: null,
+      currentPeriodStart: '2026-07-01T00:00:00.000Z',
+      currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+      cancelAtPeriodEnd: false,
+      canceledAt: null,
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    }),
+  ),
+  http.delete(`${BASE}/v1/billing/subscription`, () =>
+    HttpResponse.json({
+      id: 'sub-1',
+      orgId: 'org-1',
+      tier: 'developer',
+      status: 'active',
+      stripeSubscriptionId: 'stripe_sub_1',
+      stripeCustomerId: 'cus_1',
+      trialEndsAt: null,
+      currentPeriodStart: '2026-07-01T00:00:00.000Z',
+      currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+      cancelAtPeriodEnd: true,
+      canceledAt: '2026-07-15T00:00:00.000Z',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-15T00:00:00.000Z',
+    }),
+  ),
+  http.get(`${BASE}/v1/billing/invoices`, () =>
+    HttpResponse.json({
+      data: [
+        {
+          id: 'inv-1',
+          orgId: 'org-1',
+          subscriptionId: 'sub-1',
+          stripeInvoiceId: 'in_1',
+          invoiceNumber: 'INV-001',
+          status: 'paid',
+          amountDueCents: '4900',
+          amountPaidCents: '4900',
+          currency: 'usd',
+          pdfUrl: null,
+          hostedUrl: null,
+          dueDate: null,
+          paidAt: '2026-07-01T00:00:00.000Z',
+          lineItems: [],
+          createdAt: '2026-07-01T00:00:00.000Z',
+          updatedAt: '2026-07-01T00:00:00.000Z',
+        },
+      ],
+      meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    }),
+  ),
+  http.get(`${BASE}/v1/billing/usage`, () =>
+    HttpResponse.json({
+      orgId: 'org-1',
+      billingPeriod: '2026-07',
+      tier: 'free',
+      meters: {
+        api_calls: { usage: 10, limit: 1000, hardLimit: 1000 },
+      },
+    }),
+  ),
+  http.get(`${BASE}/v1/billing/limits`, () =>
+    HttpResponse.json({
+      tier: 'free',
+      limits: { apiCallsPerMonth: 1000 },
+      usage: { api_calls: { usage: 10, limit: 1000, hardLimit: 1000 } },
+      softLimitRatio: 0.8,
+      hardLimitRatio: 1,
+    }),
+  ),
+  http.post(`${BASE}/v1/stripe/connect`, () =>
+    HttpResponse.json(
+      {
+        id: 'sca-1',
+        orgId: 'org-1',
+        stripeAccountId: 'acct_1',
+        status: 'pending',
+        chargesEnabled: false,
+        payoutsEnabled: false,
+        onboardingUrl: null,
+        onboardingUrlExpiresAt: null,
+        defaultCurrency: 'usd',
+        country: 'us',
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      },
+      { status: 201 },
+    ),
+  ),
+  http.get(`${BASE}/v1/stripe/connect`, () =>
+    HttpResponse.json({
+      id: 'sca-1',
+      orgId: 'org-1',
+      stripeAccountId: 'acct_1',
+      status: 'pending',
+      chargesEnabled: false,
+      payoutsEnabled: false,
+      onboardingUrl: null,
+      onboardingUrlExpiresAt: null,
+      defaultCurrency: 'usd',
+      country: 'us',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    }),
+  ),
+  http.post(`${BASE}/v1/stripe/connect/onboarding`, () =>
+    HttpResponse.json({ url: 'https://connect.stripe.test/onboard' }),
+  ),
+  http.delete(`${BASE}/v1/stripe/connect`, () => new HttpResponse(null, { status: 204 })),
 );
 
 function makeClient(overrides?: { agentId?: string; maxRetries?: number }) {
@@ -407,5 +565,88 @@ describe('CogniStreamClient', () => {
 
   it('rejects short api keys', () => {
     expect(() => new CogniStreamClient({ apiKey: 'short' })).toThrow(/apiKey/i);
+  });
+
+  it('billing resource fetches profile, usage, limits, and invoices', async () => {
+    const c = makeClient();
+    const profile = await c.billing.getProfile();
+    expect(profile.organization.tier).toBe('free');
+
+    const usage = await c.billing.getUsage();
+    expect(usage.billingPeriod).toBe('2026-07');
+
+    const limits = await c.billing.getLimits();
+    expect(limits.softLimitRatio).toBe(0.8);
+
+    const invoices = await c.billing.listInvoices({ page: 1 });
+    expect(invoices.data[0]?.invoiceNumber).toBe('INV-001');
+  });
+
+  it('billing mutating calls send idempotency header', async () => {
+    let seenKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/v1/billing/checkout`, ({ request }) => {
+        seenKey = request.headers.get('x-idempotency-key');
+        return HttpResponse.json({ url: 'https://checkout.stripe.test/cs_1', sessionId: 'cs_1' });
+      }),
+    );
+
+    const c = makeClient();
+    const session = await c.billing.checkout({
+      tier: 'developer',
+      successUrl: 'https://app.example/success',
+      cancelUrl: 'https://app.example/cancel',
+      idempotencyKey: 'idem-checkout-1',
+    });
+    expect(session.sessionId).toBe('cs_1');
+    expect(seenKey).toBe('idem-checkout-1');
+
+    const changed = await c.billing.changeTier({ tier: 'enterprise' });
+    expect(changed.tier).toBe('enterprise');
+
+    const canceled = await c.billing.cancelSubscription();
+    expect(canceled.cancelAtPeriodEnd).toBe(true);
+  });
+
+  it('connect resource creates account and onboarding link', async () => {
+    let seenKey: string | null = null;
+    server.use(
+      http.post(`${BASE}/v1/stripe/connect`, ({ request }) => {
+        seenKey = request.headers.get('x-idempotency-key');
+        return HttpResponse.json(
+          {
+            id: 'sca-1',
+            orgId: 'org-1',
+            stripeAccountId: 'acct_1',
+            status: 'pending',
+            chargesEnabled: false,
+            payoutsEnabled: false,
+            onboardingUrl: null,
+            onboardingUrlExpiresAt: null,
+            defaultCurrency: 'usd',
+            country: 'us',
+            createdAt: '2026-07-01T00:00:00.000Z',
+            updatedAt: '2026-07-01T00:00:00.000Z',
+          },
+          { status: 201 },
+        );
+      }),
+    );
+
+    const c = makeClient();
+    const account = await c.connect.createAccount({ country: 'us' });
+    expect(account.stripeAccountId).toBe('acct_1');
+    expect(seenKey).toBeTruthy();
+
+    const fetched = await c.connect.getAccount();
+    expect(fetched.id).toBe('sca-1');
+
+    const link = await c.connect.createOnboardingLink({
+      returnUrl: 'https://app.example/return',
+      refreshUrl: 'https://app.example/refresh',
+    });
+    expect(link.url).toContain('connect.stripe');
+
+    await expect(c.connect.disconnect()).resolves.toBeDefined();
   });
 });

@@ -925,6 +925,289 @@ export async function flushUsageToDatabase(
   return written;
 }
 
+export async function getSubscription(
+  orgId: string,
+  _options: BillingOptions = {},
+): Promise<SubscriptionRow | null> {
+  return prisma.subscription.findUnique({
+    where: { orgId },
+    select: subscriptionSelect,
+  });
+}
+
+export async function getBillingProfile(
+  orgId: string,
+  options: BillingOptions = {},
+): Promise<{
+  organization: {
+    id: string;
+    name: string;
+    slug: string;
+    tier: OrganizationTier;
+    balanceCents: bigint;
+  };
+  subscription: SubscriptionRow | null;
+  pricing: (typeof PRICING_TIERS)[PricingTier];
+}> {
+  const requestId = options.requestId ?? 'unknown';
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { id: true, name: true, slug: true, tier: true, balanceCents: true },
+  });
+  if (!org) {
+    throw new AppError('NOT_FOUND', 'Organization not found', 404, requestId);
+  }
+  const subscription = await getSubscription(orgId, options);
+  const tier = (subscription?.tier ?? org.tier) as PricingTier;
+  return {
+    organization: org,
+    subscription,
+    pricing: PRICING_TIERS[tier],
+  };
+}
+
+/**
+ * Stripe Hosted Checkout for paid tiers (no custom payment forms).
+ */
+export async function createCheckoutSession(
+  orgId: string,
+  tier: OrganizationTier,
+  cycle: BillingCycle,
+  successUrl: string,
+  cancelUrl: string,
+  options: BillingOptions = {},
+): Promise<{ url: string; sessionId: string }> {
+  const requestId = options.requestId ?? 'unknown';
+  if (tier === 'free') {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'Checkout is only available for paid tiers',
+      422,
+      requestId,
+    );
+  }
+  if (!(tier in PRICING_TIERS)) {
+    throw new AppError('VALIDATION_ERROR', `Unknown tier: ${tier}`, 422, requestId);
+  }
+
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { id: true, name: true, slug: true },
+  });
+  if (!org) {
+    throw new AppError('NOT_FOUND', 'Organization not found', 404, requestId);
+  }
+
+  const existing = await prisma.subscription.findUnique({
+    where: { orgId },
+    select: { stripeCustomerId: true },
+  });
+
+  const stripe = resolveStripe(options);
+  let customerId = existing?.stripeCustomerId ?? null;
+
+  try {
+    if (!customerId) {
+      const customer = await callStripe(
+        () =>
+          stripe.customers.create({
+            name: org.name,
+            metadata: { orgId, slug: org.slug },
+          }),
+        requestId,
+      );
+      customerId = customer.id;
+      if (existing) {
+        await prisma.subscription.update({
+          where: { orgId },
+          data: { stripeCustomerId: customerId },
+          select: { id: true },
+        });
+      }
+    }
+
+    const unitAmount =
+      cycle === 'yearly'
+        ? PRICING_TIERS[tier as PricingTier].yearlyPriceCents
+        : PRICING_TIERS[tier as PricingTier].monthlyPriceCents;
+
+    const session = await callStripe(
+      () =>
+        stripe.checkout.sessions.create({
+          mode: 'subscription',
+          customer: customerId!,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: 'usd',
+                unit_amount: unitAmount,
+                recurring: { interval: cycle === 'yearly' ? 'year' : 'month' },
+                product_data: {
+                  name: `CogniStream ${PRICING_TIERS[tier as PricingTier].name}`,
+                  metadata: { tier, cycle },
+                },
+              },
+            },
+          ],
+          metadata: { orgId, tier, cycle },
+          subscription_data: {
+            metadata: { orgId, tier, cycle },
+          },
+        }),
+      requestId,
+    );
+
+    if (!session.url) {
+      throw new BillingStripeError('Checkout session missing URL', requestId);
+    }
+
+    void recordAudit({
+      orgId,
+      action: 'billing.checkout_created',
+      entityType: 'organization',
+      entityId: orgId,
+      actorType: 'system',
+      result: 'success',
+      changes: { tier, cycle, sessionId: session.id },
+    });
+
+    return { url: session.url, sessionId: session.id };
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    const message = error instanceof Error ? error.message : 'Checkout session failed';
+    throw new BillingStripeError(message, requestId);
+  }
+}
+
+export async function listInvoices(
+  orgId: string,
+  query: { page: number; limit: number },
+): Promise<{
+  items: Array<{
+    id: string;
+    orgId: string;
+    subscriptionId: string | null;
+    stripeInvoiceId: string | null;
+    invoiceNumber: string;
+    status: string;
+    amountDueCents: bigint;
+    amountPaidCents: bigint;
+    currency: string;
+    pdfUrl: string | null;
+    hostedUrl: string | null;
+    dueDate: Date | null;
+    paidAt: Date | null;
+    lineItems: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+  }>;
+  total: number;
+  page: number;
+  limit: number;
+}> {
+  const where = { orgId };
+  const [total, items] = await prisma.$transaction([
+    prisma.invoice.count({ where }),
+    prisma.invoice.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+      select: {
+        id: true,
+        orgId: true,
+        subscriptionId: true,
+        stripeInvoiceId: true,
+        invoiceNumber: true,
+        status: true,
+        amountDueCents: true,
+        amountPaidCents: true,
+        currency: true,
+        pdfUrl: true,
+        hostedUrl: true,
+        dueDate: true,
+        paidAt: true,
+        lineItems: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+  return { items, total, page: query.page, limit: query.limit };
+}
+
+export async function getInvoice(
+  orgId: string,
+  invoiceId: string,
+  requestId = 'unknown',
+): Promise<{
+  id: string;
+  orgId: string;
+  subscriptionId: string | null;
+  stripeInvoiceId: string | null;
+  invoiceNumber: string;
+  status: string;
+  amountDueCents: bigint;
+  amountPaidCents: bigint;
+  currency: string;
+  pdfUrl: string | null;
+  hostedUrl: string | null;
+  dueDate: Date | null;
+  paidAt: Date | null;
+  lineItems: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}> {
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, orgId },
+    select: {
+      id: true,
+      orgId: true,
+      subscriptionId: true,
+      stripeInvoiceId: true,
+      invoiceNumber: true,
+      status: true,
+      amountDueCents: true,
+      amountPaidCents: true,
+      currency: true,
+      pdfUrl: true,
+      hostedUrl: true,
+      dueDate: true,
+      paidAt: true,
+      lineItems: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (!invoice) {
+    throw new BillingNotFoundError('Invoice not found', requestId);
+  }
+  return invoice;
+}
+
+export async function getLimits(
+  orgId: string,
+  options: BillingOptions = {},
+): Promise<{
+  tier: OrganizationTier;
+  limits: (typeof PRICING_TIERS)[PricingTier]['limits'];
+  usage: UsageSummary['meters'];
+  softLimitRatio: number;
+  hardLimitRatio: number;
+}> {
+  const summary = await getUsageSummary(orgId, options);
+  return {
+    tier: summary.tier,
+    limits: PRICING_TIERS[summary.tier].limits,
+    usage: summary.meters,
+    softLimitRatio: 0.8,
+    hardLimitRatio: summary.tier === 'free' ? 1.0 : 1.2,
+  };
+}
+
 export function resetBillingBreakers(): void {
   resetCircuitBreakers();
 }

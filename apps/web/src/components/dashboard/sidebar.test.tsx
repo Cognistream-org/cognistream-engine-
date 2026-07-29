@@ -46,6 +46,7 @@ describe('DashboardSidebar', () => {
     expect(screen.getByRole('link', { name: /overview/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /agents/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /transactions/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /billing/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /api keys/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /settings/i })).toBeInTheDocument();
   });
@@ -63,9 +64,11 @@ describe('DashboardSidebar', () => {
     const nav = container.querySelector('nav');
     expect(nav).toBeTruthy();
     const links = screen.getAllByRole('link').filter((el) =>
-      ['Overview', 'Agents', 'Transactions', 'API Keys', 'Settings'].includes(el.textContent ?? ''),
+      ['Overview', 'Agents', 'Transactions', 'Billing', 'API Keys', 'Settings'].includes(
+        el.textContent ?? '',
+      ),
     );
-    expect(links).toHaveLength(5);
+    expect(links).toHaveLength(6);
     for (const link of links) {
       expect(link.querySelector('svg')).toBeTruthy();
       expect(link.textContent?.trim().length).toBeGreaterThan(0);

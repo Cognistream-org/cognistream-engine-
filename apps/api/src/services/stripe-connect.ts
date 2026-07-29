@@ -541,6 +541,66 @@ export async function createTransfer(
   return executeTransfer(params, options, requestId);
 }
 
+export async function getConnectAccount(
+  orgId: string,
+  options: StripeConnectOptions = {},
+): Promise<StripeConnectAccountRow> {
+  const requestId = options.requestId ?? 'unknown';
+  const account = await prisma.stripeConnectAccount.findUnique({
+    where: { orgId },
+    select: stripeConnectSelect,
+  });
+  if (!account) {
+    throw new StripeConnectNotFoundError(requestId);
+  }
+  return account;
+}
+
+export async function getConnectAccountOrNull(
+  orgId: string,
+): Promise<StripeConnectAccountRow | null> {
+  return prisma.stripeConnectAccount.findUnique({
+    where: { orgId },
+    select: stripeConnectSelect,
+  });
+}
+
+/**
+ * Delete the Stripe Express account and remove the local Connect record.
+ */
+export async function disconnectAccount(
+  orgId: string,
+  options: StripeConnectOptions = {},
+): Promise<void> {
+  const requestId = options.requestId ?? 'unknown';
+  const account = await getConnectAccount(orgId, options);
+  const stripe = resolveStripe(options);
+
+  try {
+    await callStripe(() => stripe.accounts.del(account.stripeAccountId), requestId);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    const message =
+      error instanceof Error ? error.message : 'Failed to disconnect Stripe Connect account';
+    throw new StripeConnectError(message, requestId);
+  }
+
+  await prisma.stripeConnectAccount.delete({
+    where: { id: account.id },
+    select: { id: true },
+  });
+
+  void recordAudit({
+    orgId,
+    action: 'stripe_connect.account_disconnected',
+    entityType: 'stripe_connect_account',
+    entityId: account.id,
+    actorType: 'system',
+    result: 'success',
+    changes: { stripeAccountId: account.stripeAccountId },
+  });
+}
+
 /** Test helper — clears the shared Stripe circuit breaker. */
 export function resetStripeConnectBreakers(): void {
   resetCircuitBreakers();
