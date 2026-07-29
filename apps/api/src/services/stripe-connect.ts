@@ -7,8 +7,9 @@ import { AppError } from '../lib/errors.js';
 import { getStripeClient } from '../lib/stripe.js';
 import { recordAudit } from '../security/audit-runtime.js';
 import { getCircuitBreaker, resetCircuitBreakers } from '../resilience/circuit-breaker.js';
-import { withRetry } from '../resilience/retry.js';
+import { withIdempotencyKey, withRetry } from '../resilience/retry.js';
 
+export const ONBOARDING_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 export const STRIPE_BREAKER_SERVICE = 'stripe';
 
 const stripeConnectSelect = {
@@ -56,6 +57,14 @@ export class StripeConnectError extends AppError {
     this.name = 'StripeConnectError';
   }
 }
+
+export type CreateTransferParams = {
+  stripeAccountId: string;
+  amountCents: bigint;
+  currency: string;
+  transactionId: string;
+  description: string;
+};
 
 export type StripeConnectOptions = {
   requestId?: string;
@@ -135,6 +144,26 @@ function requirementsPayload(account: Stripe.Account): Prisma.InputJsonValue {
     disabled_reason: account.requirements?.disabled_reason ?? null,
     pending_verification: account.requirements?.pending_verification ?? [],
   } satisfies Record<string, unknown> as Prisma.InputJsonValue;
+}
+
+function toSafeStripeAmount(amountCents: bigint, requestId: string): number {
+  if (amountCents <= 0n) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'amountCents must be greater than 0',
+      422,
+      requestId,
+    );
+  }
+  if (amountCents > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'amountCents exceeds safe integer range for Stripe',
+      422,
+      requestId,
+    );
+  }
+  return Number(amountCents);
 }
 
 /**
@@ -246,6 +275,75 @@ export async function createAccount(
 }
 
 /**
+ * Generate a Stripe Account Link for Connect onboarding (stored with 24h expiry).
+ */
+export async function createOnboardingLink(
+  accountId: string,
+  returnUrl: string,
+  refreshUrl: string,
+  options: StripeConnectOptions = {},
+): Promise<string> {
+  const requestId = options.requestId ?? 'unknown';
+  const stripe = resolveStripe(options);
+
+  const account = await prisma.stripeConnectAccount.findUnique({
+    where: { id: accountId },
+    select: stripeConnectSelect,
+  });
+  if (!account) {
+    throw new StripeConnectNotFoundError(requestId);
+  }
+
+  let link: Stripe.AccountLink;
+  try {
+    link = await callStripe(
+      () =>
+        stripe.accountLinks.create({
+          account: account.stripeAccountId,
+          refresh_url: refreshUrl,
+          return_url: returnUrl,
+          type: 'account_onboarding',
+        }),
+      requestId,
+    );
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    const message =
+      error instanceof Error ? error.message : 'Failed to create onboarding link';
+    throw new StripeConnectError(message, requestId);
+  }
+
+  const expiresAt = new Date(Date.now() + ONBOARDING_LINK_TTL_MS);
+  const nextStatus: StripeConnectStatus =
+    account.status === 'pending' ? 'onboarding' : account.status;
+
+  await prisma.stripeConnectAccount.update({
+    where: { id: account.id },
+    data: {
+      onboardingUrl: link.url,
+      onboardingUrlExpiresAt: expiresAt,
+      status: nextStatus,
+    },
+    select: { id: true },
+  });
+
+  void recordAudit({
+    orgId: account.orgId,
+    action: 'stripe_connect.onboarding_link_created',
+    entityType: 'stripe_connect_account',
+    entityId: account.id,
+    actorType: 'system',
+    result: 'success',
+    changes: {
+      expiresAt: expiresAt.toISOString(),
+      status: nextStatus,
+    },
+  });
+
+  return link.url;
+}
+
+/**
  * Sync local Connect account state from a Stripe account.updated payload.
  */
 export async function handleAccountUpdated(
@@ -323,6 +421,124 @@ export async function canReceivePayouts(orgId: string): Promise<boolean> {
     account.payoutsEnabled &&
     account.status === 'active'
   );
+}
+
+async function executeTransfer(
+  params: CreateTransferParams,
+  options: StripeConnectOptions,
+  requestId: string,
+): Promise<string> {
+  const stripe = resolveStripe(options);
+  const amount = toSafeStripeAmount(params.amountCents, requestId);
+  const currency = params.currency.trim().toLowerCase();
+  if (!/^[a-z]{3}$/.test(currency)) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'currency must be a 3-letter ISO code',
+      422,
+      requestId,
+    );
+  }
+
+  const transfer = await callStripe(
+    () =>
+      stripe.transfers.create(
+        {
+          amount,
+          currency,
+          destination: params.stripeAccountId,
+          description: params.description,
+          metadata: {
+            transactionId: params.transactionId,
+          },
+        },
+        {
+          idempotencyKey: `transfer:${params.transactionId}`,
+        },
+      ),
+    requestId,
+  );
+
+  const transferredAt = new Date();
+  try {
+    await prisma.platformFeeLedger.update({
+      where: { transactionId: params.transactionId },
+      data: {
+        stripeTransferId: transfer.id,
+        transferredAt,
+      },
+      select: { id: true },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2025'
+    ) {
+      // Ledger row may not exist yet — transfer still succeeded.
+    } else {
+      throw error;
+    }
+  }
+
+  const connect = await prisma.stripeConnectAccount.findUnique({
+    where: { stripeAccountId: params.stripeAccountId },
+    select: { orgId: true, id: true },
+  });
+
+  void recordAudit({
+    orgId: connect?.orgId ?? null,
+    action: 'stripe_connect.transfer_created',
+    entityType: 'transaction',
+    entityId: params.transactionId,
+    actorType: 'system',
+    result: 'success',
+    changes: {
+      stripeTransferId: transfer.id,
+      amountCents: params.amountCents.toString(),
+      currency,
+      stripeAccountId: params.stripeAccountId,
+    },
+  });
+
+  return transfer.id;
+}
+
+/**
+ * Transfer net funds to a connected account (circuit breaker + retry + idempotency).
+ */
+export async function createTransfer(
+  params: CreateTransferParams,
+  options: StripeConnectOptions = {},
+): Promise<string> {
+  const requestId = options.requestId ?? 'unknown';
+
+  if (options.redis) {
+    const result = await withIdempotencyKey({
+      redis: options.redis,
+      key: `stripe-transfer:${params.transactionId}`,
+      fn: () => executeTransfer(params, options, requestId),
+    });
+
+    if (result.status === 'duplicate') {
+      const ledger = await prisma.platformFeeLedger.findUnique({
+        where: { transactionId: params.transactionId },
+        select: { stripeTransferId: true },
+      });
+      if (ledger?.stripeTransferId) {
+        return ledger.stripeTransferId;
+      }
+      throw new AppError(
+        'CONFLICT',
+        'Transfer already in progress for this transaction',
+        409,
+        requestId,
+      );
+    }
+
+    return result.value;
+  }
+
+  return executeTransfer(params, options, requestId);
 }
 
 /** Test helper — clears the shared Stripe circuit breaker. */
