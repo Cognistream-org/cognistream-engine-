@@ -11,6 +11,7 @@ import { initMetrics } from './telemetry/metrics.js';
 import { metricsRoutes } from './telemetry/metrics-route.js';
 import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rate-limit.js';
+import { usageMeteringPlugin } from './plugins/usage-metering.js';
 import { websocketPlugin } from './plugins/websocket.js';
 import { apiMaturityPlugin } from './plugins/api-maturity.js';
 import { healthRoutes } from './routes/health.js';
@@ -77,6 +78,7 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
   await app.register(apiMaturityPlugin);
   await app.register(authPlugin);
   await app.register(rateLimitPlugin);
+  await app.register(usageMeteringPlugin);
   await app.register(websocketPlugin);
 
   await app.register(healthRoutes, { version: env.APP_VERSION });
