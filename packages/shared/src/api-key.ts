@@ -5,6 +5,8 @@ export const ApiKeyScopeSchema = z.enum([
   'write:agents',
   'read:transactions',
   'write:transactions',
+  'read:billing',
+  'write:billing',
   'admin:keys',
   'admin:disputes',
 ]);

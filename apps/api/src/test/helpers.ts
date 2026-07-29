@@ -49,6 +49,8 @@ export async function createTestOrgWithKey(options?: {
         'write:agents',
         'read:transactions',
         'write:transactions',
+        'read:billing',
+        'write:billing',
         'admin:keys',
       ],
     },
@@ -103,6 +105,11 @@ export async function cleanupOrg(orgId: string): Promise<void> {
     });
   }
 
+  await prisma.platformFeeLedger.deleteMany({ where: { orgId } });
+  await prisma.usageRecord.deleteMany({ where: { orgId } });
+  await prisma.invoice.deleteMany({ where: { orgId } });
+  await prisma.subscription.deleteMany({ where: { orgId } });
+  await prisma.stripeConnectAccount.deleteMany({ where: { orgId } });
   await prisma.auditLog.deleteMany({ where: { orgId } });
   await prisma.webhook.deleteMany({ where: { orgId } });
   await prisma.agent.deleteMany({ where: { orgId } });
