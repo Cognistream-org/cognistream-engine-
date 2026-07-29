@@ -9,6 +9,7 @@ import { prisma } from '../lib/prisma.js';
 import { createId } from '../lib/uuid.js';
 import { AppError } from '../lib/errors.js';
 import { withSpan, observeDisputeResolution } from '../telemetry/index.js';
+import { recordAudit } from '../security/audit-runtime.js';
 import { dispatchEvent } from './webhooks.js';
 import { updateReputation } from './reputation.js';
 import { transactionDetailSelect } from './transactions.js';
@@ -162,6 +163,17 @@ export async function createDispute(
     transactionId: dispute.transactionId,
     reason: dispute.reason,
   }).catch(() => undefined);
+
+  void recordAudit({
+    orgId,
+    action: 'dispute.created',
+    entityType: 'dispute',
+    entityId: dispute.id,
+    actorType: 'agent',
+    actorId: raisedByAgentId,
+    result: 'success',
+    changes: { transactionId: dispute.transactionId, reason: dispute.reason },
+  });
 
   if (redis) {
     void publishRealtime(redis, orgId, 'dispute.created', {
@@ -354,6 +366,16 @@ export async function resolveDispute(
 
       observeDisputeResolution(Number(process.hrtime.bigint() - started) / 1e9);
       span.setAttribute('dispute.status', dispute.status);
+      void recordAudit({
+        orgId: result.buyerOrgId,
+        action: 'dispute.resolved',
+        entityType: 'dispute',
+        entityId: dispute.id,
+        actorType: 'api_key',
+        result: 'success',
+        changes: { resolution: result.resolution, status: dispute.status },
+      });
+
       return { dispute, transaction: dispute.transaction };
     },
     { 'request.id': requestId },

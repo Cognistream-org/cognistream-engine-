@@ -5,18 +5,21 @@ import type { Logger } from 'pino';
 import type { Env } from './config.js';
 import { createRedisClient } from './lib/redis.js';
 import { registerErrorHandler } from './lib/error-handler.js';
+import { createId } from './lib/uuid.js';
 import { getActiveTraceIds } from './telemetry/tracing.js';
 import { initMetrics } from './telemetry/metrics.js';
 import { metricsRoutes } from './telemetry/metrics-route.js';
 import { authPlugin } from './plugins/auth.js';
 import { rateLimitPlugin } from './plugins/rate-limit.js';
 import { websocketPlugin } from './plugins/websocket.js';
+import { apiMaturityPlugin } from './plugins/api-maturity.js';
 import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { transactionRoutes } from './routes/transactions.js';
 import { disputeRoutes } from './routes/disputes.js';
 import { overviewRoutes } from './routes/overview.js';
+import { initAuditRuntime, stopAuditRuntime } from './security/audit-runtime.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -25,12 +28,14 @@ declare module 'fastify' {
 }
 
 export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstance> {
+  // Ensure Prisma encryption extension sees the same keys as loadEnv
+  process.env.ENCRYPTION_KEYS = env.ENCRYPTION_KEYS;
   initMetrics({ collectDefaultMetrics: env.NODE_ENV !== 'test' });
 
   const app = Fastify({
     loggerInstance: logger,
     requestIdHeader: 'x-request-id',
-    genReqId: () => crypto.randomUUID(),
+    genReqId: () => createId(),
   });
 
   await app.register(sensible);
@@ -49,7 +54,15 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
   const redis = createRedisClient(env.REDIS_URL, logger);
   app.decorate('redis', redis);
 
+  initAuditRuntime({
+    redis,
+    auditHmacKey: env.AUDIT_HMAC_KEY,
+    logger,
+    startWorker: env.NODE_ENV !== 'test',
+  });
+
   app.addHook('onClose', async () => {
+    await stopAuditRuntime();
     try {
       if (redis.status === 'ready') {
         await redis.quit();
@@ -61,6 +74,7 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
     }
   });
 
+  await app.register(apiMaturityPlugin);
   await app.register(authPlugin);
   await app.register(rateLimitPlugin);
   await app.register(websocketPlugin);

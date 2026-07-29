@@ -44,8 +44,8 @@ services:
       DATABASE_URL: postgresql://cognistream:cognistream_demo@postgres:5432/cognistream?schema=public
       REDIS_URL: redis://redis:6379
       SEED_MODE: demo
-      JWT_SECRET: demo-jwt-secret-change-me-in-prod-32chars
-      COOKIE_SECRET: demo-cookie-secret-change-me-32chars
+      ENCRYPTION_KEYS: ${ENCRYPTION_KEYS:?Set ENCRYPTION_KEYS before starting demo}
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?Set AUDIT_HMAC_KEY before starting demo}
     depends_on:
       postgres:
         condition: service_healthy

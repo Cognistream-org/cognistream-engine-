@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { randomBytes } from 'node:crypto';
 
 const csvList = z
   .string()
@@ -31,9 +32,19 @@ const envSchema = z.object({
   METRICS_IP_ALLOWLIST: csvList,
   /** Semver shown on health endpoints. */
   APP_VERSION: z.string().default('0.1.0'),
+  ENCRYPTION_KEYS: z.string().min(1).optional(),
+  AUDIT_HMAC_KEY: z.string().min(1).optional(),
 });
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema> & {
+  ENCRYPTION_KEYS: string;
+  AUDIT_HMAC_KEY: string;
+};
+
+function ephemeralTestKey(prefix: string): string {
+  // Deterministic-enough per process; not a production secret.
+  return `${prefix}:${randomBytes(32).toString('base64')}`;
+}
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = envSchema.safeParse(source);
@@ -43,5 +54,34 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .join('; ');
     throw new Error(`Invalid environment configuration: ${details}`);
   }
-  return parsed.data;
+
+  const data = parsed.data;
+  let encryptionKeys = data.ENCRYPTION_KEYS;
+  let auditHmacKey = data.AUDIT_HMAC_KEY;
+
+  if (!encryptionKeys) {
+    if (data.NODE_ENV === 'test') {
+      encryptionKeys = ephemeralTestKey('test');
+    } else {
+      throw new Error(
+        'Invalid environment configuration: ENCRYPTION_KEYS: Required',
+      );
+    }
+  }
+
+  if (!auditHmacKey) {
+    if (data.NODE_ENV === 'test') {
+      auditHmacKey = randomBytes(32).toString('base64');
+    } else {
+      throw new Error(
+        'Invalid environment configuration: AUDIT_HMAC_KEY: Required',
+      );
+    }
+  }
+
+  return {
+    ...data,
+    ENCRYPTION_KEYS: encryptionKeys,
+    AUDIT_HMAC_KEY: auditHmacKey,
+  };
 }

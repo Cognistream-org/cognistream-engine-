@@ -71,6 +71,8 @@ jobs:
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
       LOG_LEVEL: silent
+      ENCRYPTION_KEYS: test:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+      AUDIT_HMAC_KEY: AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -131,7 +133,8 @@ jobs:
       API_HOST: 0.0.0.0
       API_PORT: 3001
       NEXT_PUBLIC_API_URL: http://localhost:3001
-      E2E_API_KEY: cs_demo_e2e_key_000000000000
+      ENCRYPTION_KEYS: test:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+      AUDIT_HMAC_KEY: AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -142,6 +145,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Generate ephemeral E2E API key
+        run: |
+          KEY="cs_e2e_$(openssl rand -hex 24)"
+          echo "E2E_API_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "::add-mask::$KEY"
       - run: pnpm --filter @cognistream/shared build
       - run: pnpm --filter @cognistream/api exec prisma migrate deploy
       - run: pnpm --filter @cognistream/api exec prisma generate

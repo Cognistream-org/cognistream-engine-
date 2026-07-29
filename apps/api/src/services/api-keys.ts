@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { createId } from '../lib/uuid.js';
 import { generateApiKey, hashApiKey } from '../lib/api-key.js';
 import { AppError } from '../lib/errors.js';
+import { recordAudit } from '../security/audit-runtime.js';
 
 export const apiKeySelect = {
   id: true,
@@ -69,6 +70,16 @@ export async function createApiKey(
     select: apiKeySelect,
   });
 
+  void recordAudit({
+    orgId,
+    action: 'api_key.created',
+    entityType: 'api_key',
+    entityId: record.id,
+    actorType: 'api_key',
+    result: 'success',
+    changes: { name: input.name, scopes: input.scopes },
+  });
+
   return { record, plaintext: key };
 }
 
@@ -105,9 +116,19 @@ export async function revokeApiKey(
     throw new ApiKeyNotFoundError(requestId);
   }
 
-  return prisma.apiKey.update({
+  const revoked = await prisma.apiKey.update({
     where: { id: apiKeyId },
     data: { revokedAt: new Date() },
     select: apiKeyMetadataSelect,
   });
+  void recordAudit({
+    orgId,
+    action: 'api_key.revoked',
+    entityType: 'api_key',
+    entityId: apiKeyId,
+    actorType: 'api_key',
+    result: 'success',
+    changes: { revokedAt: revoked.revokedAt?.toISOString() },
+  });
+  return revoked;
 }
