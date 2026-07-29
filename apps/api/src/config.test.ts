@@ -96,5 +96,33 @@ describe('loadEnv', () => {
     });
     expect(env.ENCRYPTION_KEYS.length).toBeGreaterThan(10);
     expect(env.AUDIT_HMAC_KEY.length).toBeGreaterThan(10);
+    expect(env.STRIPE_SECRET_KEY).toBe('sk_test_placeholder');
+    expect(env.STRIPE_WEBHOOK_SECRET).toBe('whsec_test_placeholder');
+    expect(env.STRIPE_PUBLISHABLE_KEY).toBe('pk_test_placeholder');
+  });
+
+  it('applies billing defaults', () => {
+    const env = loadEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      REDIS_URL: 'redis://localhost:6379',
+    });
+    expect(env.PLATFORM_FEE_DEFAULT_BASIS_POINTS).toBe(250);
+    expect(env.PLATFORM_NAME).toBe('CogniStream');
+    expect(env.PLATFORM_URL).toBe('https://cognistream.io');
+    expect(env.BILLING_GRACE_PERIOD_DAYS).toBe(3);
+    expect(env.TRIAL_DAYS).toBe(14);
+  });
+
+  it('requires Stripe keys outside test', () => {
+    expect(() =>
+      loadEnv({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        REDIS_URL: 'redis://localhost:6379',
+        ENCRYPTION_KEYS: `v1:${Buffer.alloc(32, 3).toString('base64')}`,
+        AUDIT_HMAC_KEY: Buffer.alloc(32, 4).toString('base64'),
+      }),
+    ).toThrow(/STRIPE_SECRET_KEY/);
   });
 });
