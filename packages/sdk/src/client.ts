@@ -3,7 +3,13 @@ import axios, {
   type AxiosInstance,
   type InternalAxiosRequestConfig,
 } from 'axios';
+import { randomUUID } from 'node:crypto';
 import { mapAxiosError } from './errors.js';
+import { createBillingResource, type BillingResource } from './resources/billing.js';
+import {
+  createStripeConnectResource,
+  type StripeConnectResource,
+} from './resources/stripe-connect.js';
 import { WebSocketClient } from './websocket.js';
 import type {
   Agent,
@@ -41,6 +47,10 @@ function toQuery(params?: Record<string, string | number | undefined>): string {
   return qs ? `?${qs}` : '';
 }
 
+function resolveIdempotencyKey(provided?: string): string {
+  return provided && provided.length > 0 ? provided : randomUUID();
+}
+
 export class CogniStreamClient {
   private readonly http: AxiosInstance;
   private readonly apiKey: string;
@@ -49,6 +59,9 @@ export class CogniStreamClient {
   private readonly defaultAgentId?: string;
   private streamClient: WebSocketClient | null = null;
   private readonly streamHandlers = new Map<string, Set<(payload: unknown) => void>>();
+
+  readonly billing: BillingResource;
+  readonly connect: StripeConnectResource;
 
   constructor(options: ClientOptions) {
     if (!options.apiKey || options.apiKey.length < 16) {
@@ -92,6 +105,15 @@ export class CogniStreamClient {
         return this.http.request(config);
       },
     );
+
+    const deps = {
+      request: this.request.bind(this),
+      http: this.http,
+      toQuery,
+      idempotencyKey: resolveIdempotencyKey,
+    };
+    this.billing = createBillingResource(deps);
+    this.connect = createStripeConnectResource(deps);
   }
 
   private async request<T>(fn: () => Promise<{ data: T }>): Promise<T> {
