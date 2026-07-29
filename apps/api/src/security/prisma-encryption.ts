@@ -93,12 +93,22 @@ export function encryptionExtension(encryption: EncryptionService) {
           const modelKey = model.charAt(0).toLowerCase() + model.slice(1);
           const mutArgs = args as MutationArgs;
 
-          if (
+          if (operation === 'upsert') {
+            const upsertArgs = args as {
+              create?: Record<string, unknown>;
+              update?: Record<string, unknown>;
+            };
+            if (upsertArgs.create) {
+              encryptCreateData(encryption, modelKey, upsertArgs.create);
+            }
+            if (upsertArgs.update) {
+              encryptUpdateData(encryption, modelKey, upsertArgs.update);
+            }
+          } else if (
             (operation === 'create' ||
               operation === 'createMany' ||
               operation === 'update' ||
-              operation === 'updateMany' ||
-              operation === 'upsert') &&
+              operation === 'updateMany') &&
             mutArgs.data
           ) {
             if (Array.isArray(mutArgs.data)) {
@@ -108,17 +118,6 @@ export function encryptionExtension(encryption: EncryptionService) {
                 } else {
                   encryptUpdateData(encryption, modelKey, row);
                 }
-              }
-            } else if (operation === 'upsert') {
-              const upsertArgs = args as {
-                create?: Record<string, unknown>;
-                update?: Record<string, unknown>;
-              };
-              if (upsertArgs.create) {
-                encryptCreateData(encryption, modelKey, upsertArgs.create);
-              }
-              if (upsertArgs.update) {
-                encryptUpdateData(encryption, modelKey, upsertArgs.update);
               }
             } else {
               encryptCreateData(encryption, modelKey, mutArgs.data);

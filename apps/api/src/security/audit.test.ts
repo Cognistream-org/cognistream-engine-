@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import {
   AuditImmutableError,
   AuditTrail,
@@ -150,6 +151,119 @@ describe('AuditTrail', () => {
     expect('delete' in trail).toBe(false);
     expect(typeof trail.append).toBe('function');
   });
+
+  it('skips legacy-unhashed entries during chain validation', async () => {
+    const store: Array<Record<string, unknown>> = [
+      {
+        id: createId(),
+        orgId: null,
+        action: 'legacy',
+        entityType: 'agent',
+        entityId: createId(),
+        metadata: {},
+        integrityHash: 'legacy-unhashed',
+        previousHash: null,
+        actorType: 'system',
+        actorId: null,
+        changes: {},
+        result: 'success',
+        ipAddress: null,
+        userAgent: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ];
+    const trail = new AuditTrail(mockPrisma(store) as never, hmacKey);
+    const next = await trail.append({
+      id: createId(),
+      action: 'after-legacy',
+      entityType: 'agent',
+      entityId: createId(),
+      actorType: 'system',
+      result: 'success',
+      createdAt: new Date('2026-01-01T00:00:01.000Z'),
+    });
+    expect(next.previousHash).toBe('legacy-unhashed');
+
+    const result = await trail.validateChain();
+    expect(result.valid).toBe(true);
+    expect(result.checked).toBe(2);
+  });
+
+  it('detects previousHash mismatch', async () => {
+    const store: Array<Record<string, unknown>> = [];
+    const trail = new AuditTrail(mockPrisma(store) as never, hmacKey);
+    await trail.append({
+      id: createId(),
+      action: 'a',
+      entityType: 'agent',
+      entityId: createId(),
+      actorType: 'system',
+      result: 'success',
+      createdAt: new Date('2026-07-29T00:00:00.000Z'),
+    });
+    await trail.append({
+      id: createId(),
+      action: 'b',
+      entityType: 'agent',
+      entityId: createId(),
+      actorType: 'system',
+      result: 'success',
+      createdAt: new Date('2026-07-29T00:00:01.000Z'),
+    });
+    store[1]!.previousHash = 'tampered-prev';
+    const bad = await trail.validateChain();
+    expect(bad.valid).toBe(false);
+    expect(bad.reason).toMatch(/previousHash/);
+  });
+
+  it('appendWithClient writes via provided transaction client', async () => {
+    const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) => data);
+    const tx = {
+      auditLog: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create,
+      },
+    };
+    const trail = new AuditTrail(mockPrisma() as never, hmacKey);
+    const row = await trail.appendWithClient(tx as never, {
+      action: 'in-tx',
+      entityType: 'escrow',
+      entityId: createId(),
+      actorType: 'system',
+      result: 'success',
+      createdAt: new Date('2026-07-29T00:00:00.000Z'),
+    });
+    expect(create).toHaveBeenCalled();
+    expect(row.action).toBe('in-tx');
+    expect(row.previousHash).toBeNull();
+  });
+});
+
+describe('auditImmutabilityExtension', () => {
+  it('blocks update/updateMany/delete/deleteMany', async () => {
+    const { auditImmutabilityExtension, AuditImmutableError } = await import('./audit.js');
+    let blocked: {
+      update: () => Promise<never>;
+      updateMany: () => Promise<never>;
+      delete: () => Promise<never>;
+      deleteMany: () => Promise<never>;
+    } | undefined;
+
+    const spy = vi.spyOn(Prisma, 'defineExtension').mockImplementation(((ext: {
+      query: { auditLog: typeof blocked };
+    }) => {
+      blocked = ext.query.auditLog;
+      return ext as never;
+    }) as never);
+
+    auditImmutabilityExtension();
+    expect(blocked).toBeDefined();
+    await expect(blocked!.update()).rejects.toBeInstanceOf(AuditImmutableError);
+    await expect(blocked!.updateMany()).rejects.toBeInstanceOf(AuditImmutableError);
+    await expect(blocked!.delete()).rejects.toBeInstanceOf(AuditImmutableError);
+    await expect(blocked!.deleteMany()).rejects.toBeInstanceOf(AuditImmutableError);
+    spy.mockRestore();
+  });
 });
 
 describe('enqueueAudit + worker (async)', () => {
@@ -242,5 +356,52 @@ describe('enqueueAudit + worker (async)', () => {
       action: 'escrow.released',
       entityId,
     });
+  });
+
+  it('worker connects when redis is not ready and logs iteration errors', async () => {
+    vi.useRealTimers();
+    const trail = new AuditTrail(mockPrisma() as never, hmacKey);
+    const append = vi.spyOn(trail, 'append').mockRejectedValueOnce(new Error('db down'));
+
+    let calls = 0;
+    const redis = {
+      status: 'wait' as string,
+      connect: vi.fn(async () => {
+        redis.status = 'ready';
+      }),
+      brpop: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return [
+            AUDIT_QUEUE_KEY,
+            JSON.stringify({
+              id: createId(),
+              action: 'x',
+              entityType: 'agent',
+              entityId: createId(),
+              actorType: 'system',
+              result: 'success',
+              createdAt: new Date().toISOString(),
+            }),
+          ] as [string, string];
+        }
+        await new Promise((r) => setTimeout(r, 5));
+        return null;
+      }),
+    };
+    const logger = { error: vi.fn() };
+    const worker = startAuditWorker({
+      redis: redis as never,
+      trail,
+      logger: logger as never,
+      pollTimeoutSeconds: 1,
+    });
+
+    await vi.waitFor(() => {
+      expect(redis.connect).toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalled();
+    });
+    await worker.stop();
+    expect(append).toHaveBeenCalled();
   });
 });

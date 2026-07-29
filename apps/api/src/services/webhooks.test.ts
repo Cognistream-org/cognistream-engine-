@@ -93,4 +93,18 @@ describe('dispatchEvent', () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(6);
   });
+
+  it('handles invalid webhook URL host without throwing', async () => {
+    vi.spyOn(prisma.webhook, 'findMany').mockResolvedValue([
+      { id: 'hook-1', url: 'not-a-url', secret: 's' },
+    ] as never);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+
+    await dispatchEvent('org-1', 'dispute.created', { id: 'd1' });
+    expect(fetchSpy).toHaveBeenCalled();
+  });
 });

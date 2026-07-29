@@ -64,6 +64,43 @@ describe('withRetry', () => {
     }, { sleep: async () => undefined, random: () => 0 });
     expect(result).toBe('ok');
   });
+
+  it('stops retrying when shouldRetry returns false', async () => {
+    let calls = 0;
+    await expect(
+      withRetry(
+        async () => {
+          calls += 1;
+          throw new Error('nope');
+        },
+        {
+          maxAttempts: 6,
+          shouldRetry: () => false,
+          sleep: async () => undefined,
+        },
+      ),
+    ).rejects.toThrow('nope');
+    expect(calls).toBe(1);
+  });
+
+  it('clamps attempt index to schedule length', () => {
+    const delay = calculateBackoffMs(99, { random: () => 0 });
+    expect(delay).toBe(32_000);
+  });
+
+  it('uses defaultSleep when sleep not provided', async () => {
+    vi.useFakeTimers();
+    const p = withRetry(
+      async (attempt) => {
+        if (attempt === 1) throw new Error('retry');
+        return 'done';
+      },
+      { maxAttempts: 2, random: () => 0, backoffMs: [10] },
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(p).resolves.toBe('done');
+    vi.useRealTimers();
+  });
 });
 
 describe('withIdempotencyKey', () => {
@@ -105,6 +142,23 @@ describe('withIdempotencyKey', () => {
     expect(first).toEqual({ status: 'executed', value: { n: 1 }, key: 'fixed-key' });
     expect(second).toEqual({ status: 'duplicate', key: 'fixed-key' });
     expect(runs).toBe(1);
+  });
+
+  it('connects redis when status is not ready', async () => {
+    const connect = vi.fn(async () => undefined);
+    const redis = {
+      status: 'wait' as const,
+      connect,
+      set: vi.fn(async () => 'OK'),
+      del: vi.fn(),
+    };
+    const result = await withIdempotencyKey({
+      redis: redis as never,
+      key: 'k1',
+      fn: async () => 1,
+    });
+    expect(connect).toHaveBeenCalled();
+    expect(result).toEqual({ status: 'executed', value: 1, key: 'k1' });
   });
 
   it('releases key when fn throws', async () => {

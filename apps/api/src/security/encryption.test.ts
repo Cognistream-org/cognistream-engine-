@@ -32,12 +32,49 @@ describe('parseEncryptionKeys', () => {
     const k = keyB64();
     expect(() => parseEncryptionKeys(`a:${k},a:${k}`)).toThrow(/Duplicate/);
   });
+  it('rejects empty entries and whitespace-only segments', () => {
+    const k = keyB64();
+    expect(() => parseEncryptionKeys(` ,${k}`)).toThrow(EncryptionError);
+    // leading empty after split of ",id:key" — empty segment skipped, but need at least one valid
+    expect(parseEncryptionKeys(`  ,v1:${k}`).primaryKeyId).toBe('v1');
+  });
+
+  it('rejects blank key id after trim', () => {
+    expect(() => parseEncryptionKeys(` :${keyB64()}`)).toThrow(EncryptionError);
+  });
 });
 
 describe('EncryptionService', () => {
   const keyA = keyB64();
   const keyB = keyB64();
   const service = createEncryptionService(`v1:${keyA}`);
+
+  it('exposes primaryKey getter', () => {
+    expect(service.primaryKey).toBe('v1');
+  });
+
+  it('encryptJsonField defaults nullish to empty object', () => {
+    const enc = service.encryptJsonField(undefined);
+    expect(service.decryptJsonField(enc)).toEqual({});
+  });
+
+  it('decryptJsonField passes through undefined', () => {
+    expect(service.decryptJsonField(undefined)).toBeUndefined();
+  });
+
+  it('rejects invalid auth tag length', () => {
+    const payload = service.encrypt('x');
+    expect(() =>
+      service.decrypt({
+        ...payload,
+        tag: Buffer.from('short').toString('base64'),
+      }),
+    ).toThrow(/Invalid auth tag/);
+  });
+
+  it('treats malformed JSON starting with { as legacy plaintext', () => {
+    expect(service.decryptStringField('{not-json')).toBe('{not-json');
+  });
 
   it('roundtrips plaintext', () => {
     const payload = service.encrypt('secret-value');

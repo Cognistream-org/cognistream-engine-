@@ -54,6 +54,40 @@ describe('loadEnv', () => {
     ).toThrow(/ENCRYPTION_KEYS/);
   });
 
+  it('requires AUDIT_HMAC_KEY outside test', () => {
+    expect(() =>
+      loadEnv({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        REDIS_URL: 'redis://localhost:6379',
+        ENCRYPTION_KEYS: `v1:${Buffer.alloc(32, 3).toString('base64')}`,
+      }),
+    ).toThrow(/AUDIT_HMAC_KEY/);
+  });
+
+  it('accepts OTEL_ENABLED=1 and trims metrics allowlist entries', () => {
+    const env = loadEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      REDIS_URL: 'redis://localhost:6379',
+      OTEL_ENABLED: '1',
+      METRICS_IP_ALLOWLIST: ' 10.0.0.1 , ,10.0.0.2 ',
+    });
+    expect(env.OTEL_ENABLED).toBe(true);
+    expect(env.METRICS_IP_ALLOWLIST).toEqual(['10.0.0.1', '10.0.0.2']);
+  });
+
+  it('requires ENCRYPTION_KEYS in development', () => {
+    expect(() =>
+      loadEnv({
+        NODE_ENV: 'development',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        REDIS_URL: 'redis://localhost:6379',
+        AUDIT_HMAC_KEY: Buffer.alloc(32, 4).toString('base64'),
+      }),
+    ).toThrow(/ENCRYPTION_KEYS/);
+  });
+
   it('auto-generates secrets in test when omitted', () => {
     const env = loadEnv({
       NODE_ENV: 'test',
