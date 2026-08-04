@@ -64,6 +64,7 @@ import { processStripeEvent, stripeWebhookRoutes } from './stripe-webhooks.js';
 
 function createMemoryRedis() {
   const store = new Map<string, string>();
+  const counters = new Map<string, number>();
   const redis = {
     status: 'ready' as const,
     connect: vi.fn(async () => undefined),
@@ -76,8 +77,14 @@ function createMemoryRedis() {
       store.delete(key);
       return 1;
     }),
+    incr: vi.fn(async (key: string) => {
+      const next = (counters.get(key) ?? 0) + 1;
+      counters.set(key, next);
+      return next;
+    }),
+    expire: vi.fn(async () => 1),
   };
-  return { redis: redis as unknown as Redis, store };
+  return { redis: redis as unknown as Redis, store, counters };
 }
 
 function stripeEvent(type: string, object: unknown, id = `evt_${type}`): Stripe.Event {
@@ -476,6 +483,27 @@ describe('stripeWebhookRoutes', () => {
       payload: { id: 'evt_1' },
     });
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('returns 429 when IP rate limit is exceeded', async () => {
+    const { redis } = createMemoryRedis();
+    redis.incr = vi.fn(async () => 10_001) as never;
+    const app = await buildWebhookApp(redis);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/stripe',
+      headers: {
+        'stripe-signature': 't=1,v1=good',
+        'x-forwarded-for': '198.51.100.20',
+      },
+      payload: { id: 'evt_rl' },
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.headers['retry-after']).toBe('60');
+    expect(res.json().error.code).toBe('RATE_LIMITED');
+    expect(constructEvent).not.toHaveBeenCalled();
     await app.close();
   });
 

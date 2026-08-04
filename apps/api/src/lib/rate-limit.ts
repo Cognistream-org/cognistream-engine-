@@ -6,6 +6,22 @@ import { recordRateLimitHit } from '../telemetry/index.js';
 
 const WINDOW_SECONDS = 60;
 
+/** Public Stripe webhook — 100 requests / minute / IP (separate from auth rate limits). */
+export const STRIPE_WEBHOOK_IP_LIMIT_PER_MINUTE =
+  process.env.NODE_ENV === 'test' ? 1_000 : 100;
+
+/** Resolve client IP from X-Forwarded-For (first hop) or Fastify request.ip. */
+export function resolveClientIp(request: FastifyRequest): string {
+  const forwarded = request.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0]?.trim() ?? request.ip;
+  }
+  if (Array.isArray(forwarded) && forwarded[0]) {
+    return forwarded[0].split(',')[0]?.trim() ?? request.ip;
+  }
+  return request.ip;
+}
+
 export const TIER_LIMITS = {
   free: 100,
   developer: 1000,
@@ -39,6 +55,51 @@ async function incrWindow(redis: Redis, key: string): Promise<number> {
     await redis.expire(key, WINDOW_SECONDS);
   }
   return count;
+}
+
+/**
+ * IP rate limit for POST /v1/webhooks/stripe (no API key).
+ * Returns false when the response has already been sent (429).
+ */
+export async function enforceStripeWebhookIpLimit(options: {
+  redis: Redis;
+  request: FastifyRequest;
+  reply: FastifyReply;
+}): Promise<boolean> {
+  const { redis, request, reply } = options;
+  const requestId = String(request.id);
+  const ip = resolveClientIp(request);
+  const window = Math.floor(Date.now() / (WINDOW_SECONDS * 1000));
+  const key = `ratelimit:webhook:stripe:${ip}:${window}`;
+
+  try {
+    await ensureRedis(redis);
+    const count = await incrWindow(redis, key);
+    if (count > STRIPE_WEBHOOK_IP_LIMIT_PER_MINUTE) {
+      recordRateLimitHit('POST /v1/webhooks/stripe', 'anonymous');
+      reply.header('Retry-After', String(WINDOW_SECONDS));
+      await reply.status(429).send(
+        errorBody('RATE_LIMITED', 'Stripe webhook rate limit exceeded', requestId),
+      );
+      return false;
+    }
+    reply.header('X-RateLimit-Limit', String(STRIPE_WEBHOOK_IP_LIMIT_PER_MINUTE));
+    reply.header(
+      'X-RateLimit-Remaining',
+      String(Math.max(0, STRIPE_WEBHOOK_IP_LIMIT_PER_MINUTE - count)),
+    );
+    const windowEnd =
+      (Math.floor(Date.now() / (WINDOW_SECONDS * 1000)) + 1) * WINDOW_SECONDS;
+    reply.header('X-RateLimit-Reset', String(windowEnd));
+    return true;
+  } catch (error) {
+    request.log.error({ err: error }, 'Stripe webhook rate limiter unavailable');
+    reply.header('Retry-After', String(WINDOW_SECONDS));
+    await reply.status(429).send(
+      errorBody('RATE_LIMITER_UNAVAILABLE', 'Rate limiter unavailable', requestId),
+    );
+    return false;
+  }
 }
 
 /** Stricter limit for POST /v1/transactions — 10 creates per minute per org. */

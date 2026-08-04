@@ -37,6 +37,7 @@ const env: Env = {
   REDIS_URL: 'redis://localhost:6379',
   OTEL_ENABLED: false,
   OTEL_SERVICE_NAME: 'cognistream-api-test',
+  CORS_ORIGINS: ['http://localhost:3000', 'http://localhost:3002'],
   METRICS_IP_ALLOWLIST: ['127.0.0.1'],
   APP_VERSION: '0.1.0-test',
   ENCRYPTION_KEYS: `test:${Buffer.alloc(32, 1).toString('base64')}`,

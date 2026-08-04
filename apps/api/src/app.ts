@@ -14,6 +14,8 @@ import { rateLimitPlugin } from './plugins/rate-limit.js';
 import { usageMeteringPlugin } from './plugins/usage-metering.js';
 import { websocketPlugin } from './plugins/websocket.js';
 import { apiMaturityPlugin } from './plugins/api-maturity.js';
+import { securityHeadersPlugin } from './plugins/security-headers.js';
+import { corsPlugin } from './plugins/cors.js';
 import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
@@ -78,6 +80,10 @@ export async function buildApp(env: Env, logger: Logger): Promise<FastifyInstanc
     }
   });
 
+  await app.register(securityHeadersPlugin, {
+    enableHsts: env.NODE_ENV === 'production',
+  });
+  await app.register(corsPlugin, { origins: env.CORS_ORIGINS });
   await app.register(apiMaturityPlugin);
   await app.register(authPlugin);
   await app.register(rateLimitPlugin);

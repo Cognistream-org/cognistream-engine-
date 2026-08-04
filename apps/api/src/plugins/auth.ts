@@ -161,18 +161,21 @@ const authPluginImpl: FastifyPluginAsync = async (app) => {
     return null;
   }
 
-  async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  /**
+   * @returns true when auth + rate-limit succeeded; false when a response was already sent.
+   */
+  async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
     const requestId = String(request.id);
     const rawKey = request.headers['x-api-key'];
     if (typeof rawKey !== 'string' || rawKey.length < 16) {
       unauthorized(reply, requestId);
-      return;
+      return false;
     }
 
     const auth = await resolveAuth(rawKey);
     if (!auth) {
       unauthorized(reply, requestId);
-      return;
+      return false;
     }
 
     request.auth = auth;
@@ -191,19 +194,21 @@ const authPluginImpl: FastifyPluginAsync = async (app) => {
       request,
       reply,
     });
-    if (!allowed) {
-      return;
-    }
+    return allowed;
   }
 
-  app.decorate('authenticate', authenticate);
+  app.decorate('authenticate', async (request, reply) => {
+    await authenticate(request, reply);
+  });
   app.decorate('invalidateApiKeyCache', invalidateApiKeyCache);
 
   app.decorate('requireScopes', (...required: string[]) => {
     return async (request: FastifyRequest, reply: FastifyReply) => {
-      await authenticate(request, reply);
-      if (reply.sent) {
-        return;
+      const authed = await authenticate(request, reply);
+      // Fastify 5: reply.sent is only true after writableEnded. Guard on status
+      // and always return reply after a response has been initiated.
+      if (!authed || reply.sent || reply.statusCode >= 400) {
+        return reply;
       }
 
       const scopes = request.auth?.scopes ?? [];
@@ -214,6 +219,7 @@ const authPluginImpl: FastifyPluginAsync = async (app) => {
           String(request.id),
           `Missing required scope(s): ${missing.join(', ')}`,
         );
+        return reply;
       }
     };
   });

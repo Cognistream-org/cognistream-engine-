@@ -3,7 +3,9 @@ import type { Redis } from 'ioredis';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   enforceRateLimit,
+  enforceStripeWebhookIpLimit,
   enforceTransactionCreateLimit,
+  resolveClientIp,
   TIER_LIMITS,
   TRANSACTION_CREATE_LIMIT_PER_MINUTE,
 } from './rate-limit.js';
@@ -136,5 +138,66 @@ describe('enforceTransactionCreateLimit', () => {
     });
     expect(ok).toBe(false);
     expect(reply.status).toHaveBeenCalledWith(429);
+  });
+});
+
+describe('resolveClientIp', () => {
+  it('prefers the first X-Forwarded-For hop', () => {
+    const request = {
+      ip: '10.0.0.1',
+      headers: { 'x-forwarded-for': '203.0.113.10, 10.0.0.1' },
+    } as unknown as FastifyRequest;
+    expect(resolveClientIp(request)).toBe('203.0.113.10');
+  });
+
+  it('falls back to request.ip', () => {
+    const request = {
+      ip: '127.0.0.1',
+      headers: {},
+    } as unknown as FastifyRequest;
+    expect(resolveClientIp(request)).toBe('127.0.0.1');
+  });
+});
+
+describe('enforceStripeWebhookIpLimit', () => {
+  it('allows requests under the per-IP limit', async () => {
+    const redis = mockRedis({ incr: vi.fn(async () => 1) } as Partial<Redis>);
+    const { request, reply, headers } = mockReqReply();
+    (request as { ip?: string }).ip = '203.0.113.5';
+    (request as { headers: Record<string, string> }).headers = {};
+
+    const ok = await enforceStripeWebhookIpLimit({ redis, request, reply });
+    expect(ok).toBe(true);
+    expect(headers['x-ratelimit-limit']).toBeDefined();
+  });
+
+  it('returns 429 with Retry-After when exceeded', async () => {
+    const redis = mockRedis({
+      incr: vi.fn(async () => 10_001),
+    } as Partial<Redis>);
+    const { request, reply, headers } = mockReqReply();
+    (request as { ip?: string }).ip = '203.0.113.5';
+    (request as { headers: Record<string, string> }).headers = {};
+
+    const ok = await enforceStripeWebhookIpLimit({ redis, request, reply });
+    expect(ok).toBe(false);
+    expect(reply.status).toHaveBeenCalledWith(429);
+    expect(headers['retry-after']).toBe('60');
+  });
+
+  it('fail-closes when Redis is unavailable', async () => {
+    const redis = mockRedis({
+      incr: vi.fn(async () => {
+        throw new Error('redis down');
+      }),
+    } as Partial<Redis>);
+    const { request, reply, headers } = mockReqReply();
+    (request as { ip?: string }).ip = '203.0.113.5';
+    (request as { headers: Record<string, string> }).headers = {};
+
+    const ok = await enforceStripeWebhookIpLimit({ redis, request, reply });
+    expect(ok).toBe(false);
+    expect(reply.status).toHaveBeenCalledWith(429);
+    expect(headers['retry-after']).toBe('60');
   });
 });
