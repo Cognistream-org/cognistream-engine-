@@ -1,8 +1,10 @@
 openapi: 3.1.0
 info:
   title: CogniStream API
-  version: 1.0.0
-  description: AI-to-AI payment infrastructure with escrow, reputation, and disputes.
+  version: 1.1.0
+  description: >
+    AI-to-AI payment infrastructure with escrow, reputation, disputes,
+    billing, Stripe Connect, and usage metering.
   contact:
     name: CogniStream
     url: https://github.com/Cognistream-org/cognistream-engine-
@@ -21,6 +23,12 @@ tags:
   - name: Disputes
   - name: Overview
   - name: Realtime
+  - name: Billing
+    description: Subscriptions, invoices, usage metering, and plan limits
+  - name: Stripe Connect
+    description: Connect Express accounts for seller payouts
+  - name: Webhooks
+    description: Incoming Stripe webhook receiver (signature-verified)
 
 security:
   - ApiKeyAuth: []
@@ -280,6 +288,341 @@ components:
               type: string
             activeAgents:
               type: integer
+
+    OrganizationTier:
+      type: string
+      enum: [free, developer, enterprise]
+
+    BillingCycle:
+      type: string
+      enum: [monthly, yearly]
+
+    BillingPricing:
+      type: object
+      properties:
+        name:
+          type: string
+        monthlyPriceCents:
+          type: integer
+        yearlyPriceCents:
+          type: integer
+        limits:
+          type: object
+          additionalProperties:
+            type: integer
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+        platformFeeBasisPoints:
+          type: integer
+          description: Platform fee in basis points (1 bp = 0.01%)
+        overage:
+          type: object
+          nullable: true
+          properties:
+            apiCallCents:
+              type: integer
+            transactionCents:
+              type: integer
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        tier:
+          $ref: '#/components/schemas/OrganizationTier'
+        status:
+          type: string
+          description: active | trialing | past_due | canceled | incomplete
+        stripeSubscriptionId:
+          type: string
+          nullable: true
+        stripeCustomerId:
+          type: string
+          nullable: true
+        trialEndsAt:
+          type: string
+          format: date-time
+          nullable: true
+        currentPeriodStart:
+          type: string
+          format: date-time
+        currentPeriodEnd:
+          type: string
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        canceledAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BillingProfile:
+      type: object
+      required: [organization, subscription, pricing]
+      properties:
+        organization:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            slug:
+              type: string
+            tier:
+              $ref: '#/components/schemas/OrganizationTier'
+            balanceCents:
+              type: string
+              description: Integer cents as string
+        subscription:
+          oneOf:
+            - $ref: '#/components/schemas/Subscription'
+            - type: 'null'
+        pricing:
+          $ref: '#/components/schemas/BillingPricing'
+
+    CheckoutRequest:
+      type: object
+      required: [tier, successUrl, cancelUrl]
+      properties:
+        tier:
+          type: string
+          enum: [developer, enterprise]
+        cycle:
+          $ref: '#/components/schemas/BillingCycle'
+          default: monthly
+        successUrl:
+          type: string
+          format: uri
+        cancelUrl:
+          type: string
+          format: uri
+
+    CheckoutSession:
+      type: object
+      required: [url, sessionId]
+      properties:
+        url:
+          type: string
+          format: uri
+        sessionId:
+          type: string
+
+    PortalSession:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Stripe Customer Portal URL
+
+    ChangeTierRequest:
+      type: object
+      required: [tier]
+      properties:
+        tier:
+          $ref: '#/components/schemas/OrganizationTier'
+        cycle:
+          $ref: '#/components/schemas/BillingCycle'
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        subscriptionId:
+          type: string
+          nullable: true
+        stripeInvoiceId:
+          type: string
+          nullable: true
+        invoiceNumber:
+          type: string
+        status:
+          type: string
+        amountDueCents:
+          type: string
+        amountPaidCents:
+          type: string
+        currency:
+          type: string
+        pdfUrl:
+          type: string
+          nullable: true
+        hostedUrl:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        lineItems:
+          description: Stripe line items snapshot
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UsageMeter:
+      type: object
+      properties:
+        usage:
+          type: integer
+        limit:
+          type: integer
+        hardLimit:
+          type: integer
+
+    UsageSummary:
+      type: object
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        billingPeriod:
+          type: string
+          description: YYYY-MM
+        tier:
+          $ref: '#/components/schemas/OrganizationTier'
+        meters:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/UsageMeter'
+          description: Keys include api_calls, transactions, transaction_volume_cents
+
+    LimitsResponse:
+      type: object
+      properties:
+        tier:
+          $ref: '#/components/schemas/OrganizationTier'
+        limits:
+          type: object
+          additionalProperties:
+            type: integer
+        usage:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/UsageMeter'
+        softLimitRatio:
+          type: number
+          description: Soft warning threshold (0.8)
+        hardLimitRatio:
+          type: number
+          description: Free = 1.0; paid tiers = 1.2
+
+    StripeConnectAccount:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        stripeAccountId:
+          type: string
+        status:
+          type: string
+        chargesEnabled:
+          type: boolean
+        payoutsEnabled:
+          type: boolean
+        onboardingUrl:
+          type: string
+          nullable: true
+        onboardingUrlExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        defaultCurrency:
+          type: string
+        country:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateConnectAccountRequest:
+      type: object
+      required: [country]
+      properties:
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          description: ISO 3166-1 alpha-2 country code (normalized to lowercase)
+
+    ConnectOnboardingRequest:
+      type: object
+      required: [returnUrl, refreshUrl]
+      properties:
+        returnUrl:
+          type: string
+          format: uri
+        refreshUrl:
+          type: string
+          format: uri
+
+    OnboardingLinkResponse:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+
+    StripeWebhookEvent:
+      type: object
+      description: Raw Stripe Event payload (verified via Stripe-Signature)
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [event]
+        type:
+          type: string
+          description: >
+            Handled types include account.updated, customer.subscription.*,
+            invoice.*, transfer.created / transfer.failed
+        data:
+          type: object
+          properties:
+            object:
+              type: object
+              additionalProperties: true
+        created:
+          type: integer
+        livemode:
+          type: boolean
 
 paths:
   /health:
@@ -729,3 +1072,778 @@ paths:
       responses:
         '101':
           description: Switching Protocols
+
+  /v1/billing/profile:
+    get:
+      tags: [Billing]
+      summary: Get billing profile
+      description: Returns organization tier, current subscription, and pricing config for the authenticated org.
+      operationId: getBillingProfile
+      x-scopes: [read:billing]
+      responses:
+        '200':
+          description: Billing profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingProfile'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/checkout:
+    post:
+      tags: [Billing]
+      summary: Create Stripe Checkout session
+      description: Starts a Stripe Checkout session to upgrade to Developer or Enterprise.
+      operationId: createBillingCheckout
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '200':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutSession'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/portal:
+    get:
+      tags: [Billing]
+      summary: Open Stripe Customer Portal
+      description: Returns a Stripe Customer Portal URL for managing payment methods and invoices.
+      operationId: getBillingPortal
+      x-scopes: [read:billing, write:billing]
+      parameters:
+        - name: returnUrl
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        '200':
+          description: Portal session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSession'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/subscription:
+    get:
+      tags: [Billing]
+      summary: Get subscription
+      description: Returns the organization subscription record.
+      operationId: getSubscription
+      x-scopes: [read:billing]
+      responses:
+        '200':
+          description: Subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [Billing]
+      summary: Change subscription tier
+      description: Upgrades or downgrades the organization tier (may sync with Stripe).
+      operationId: changeSubscriptionTier
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeTierRequest'
+      responses:
+        '200':
+          description: Updated subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [Billing]
+      summary: Cancel subscription
+      description: Cancels at period end (or immediately per Stripe configuration).
+      operationId: cancelSubscription
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '200':
+          description: Canceled subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/invoices:
+    get:
+      tags: [Billing]
+      summary: List invoices
+      description: Paginated invoices for the organization.
+      operationId: listInvoices
+      x-scopes: [read:billing]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invoice'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/invoices/{id}:
+    get:
+      tags: [Billing]
+      summary: Get invoice
+      description: Returns a single invoice by UUID.
+      operationId: getInvoice
+      x-scopes: [read:billing]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Invoice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Invoice not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/usage:
+    get:
+      tags: [Billing]
+      summary: Get usage summary
+      description: Current billing-period usage meters versus soft and hard limits.
+      operationId: getBillingUsage
+      x-scopes: [read:billing]
+      responses:
+        '200':
+          description: Usage summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummary'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/limits:
+    get:
+      tags: [Billing]
+      summary: Get plan limits
+      description: Tier limits, current usage, and soft/hard limit ratios.
+      operationId: getBillingLimits
+      x-scopes: [read:billing]
+      responses:
+        '200':
+          description: Limits response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LimitsResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/stripe/connect:
+    post:
+      tags: [Stripe Connect]
+      summary: Create Connect account
+      description: Creates a Stripe Connect Express account for the organization (Developer/Enterprise).
+      operationId: createStripeConnectAccount
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectAccountRequest'
+      responses:
+        '200':
+          description: Connect account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeConnectAccount'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags: [Stripe Connect]
+      summary: Get Connect account
+      description: Returns the organization's Stripe Connect account status.
+      operationId: getStripeConnectAccount
+      x-scopes: [read:billing]
+      responses:
+        '200':
+          description: Connect account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeConnectAccount'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Connect account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [Stripe Connect]
+      summary: Disconnect Connect account
+      description: Disconnects the Stripe Connect account from the organization.
+      operationId: disconnectStripeConnectAccount
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '204':
+          description: Disconnected
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/stripe/connect/onboarding:
+    post:
+      tags: [Stripe Connect]
+      summary: Create onboarding link
+      description: Returns a Stripe Account Link URL to complete Connect onboarding.
+      operationId: createStripeConnectOnboardingLink
+      x-scopes: [write:billing]
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectOnboardingRequest'
+      responses:
+        '200':
+          description: Onboarding link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingLinkResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Connect account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/webhooks/stripe:
+    post:
+      tags: [Webhooks]
+      summary: Stripe webhook receiver
+      description: >
+        Receives Stripe events. No API key — authenticity is verified via the
+        Stripe-Signature header. Idempotent (Redis) so duplicate deliveries are safe.
+      operationId: stripeWebhook
+      security: []
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StripeWebhookEvent'
+      responses:
+        '200':
+          description: Event processed (or already processed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+        '400':
+          description: Invalid payload or signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Signature verification failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Related resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
