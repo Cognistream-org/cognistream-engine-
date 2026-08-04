@@ -32,14 +32,14 @@ const apiMaturityPluginImpl: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.addHook('onSend', async (request, reply, payload) => {
-    if (!request.url.startsWith('/v1')) return payload;
-
-    reply.header('X-API-Version', API_VERSION);
-    reply.header('X-Request-Id', String(request.id));
-    ensureRateLimitReset(reply);
-
-    return payload;
+  // Sync onSend: async hooks delay reply.sent and race with wrapThenable double-send.
+  app.addHook('onSend', (request, reply, payload, done) => {
+    if (request.url.startsWith('/v1')) {
+      reply.header('X-API-Version', API_VERSION);
+      reply.header('X-Request-Id', String(request.id));
+      ensureRateLimitReset(reply);
+    }
+    done(null, payload);
   });
 };
 

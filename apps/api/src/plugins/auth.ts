@@ -205,10 +205,10 @@ const authPluginImpl: FastifyPluginAsync = async (app) => {
   app.decorate('requireScopes', (...required: string[]) => {
     return async (request: FastifyRequest, reply: FastifyReply) => {
       const authed = await authenticate(request, reply);
-      // Fastify 5: reply.sent is only true after writableEnded. Async onSend hooks
-      // mean send() returns before sent flips — guard on status instead.
+      // Fastify 5: reply.sent is only true after writableEnded. Guard on status
+      // and always return reply after a response has been initiated.
       if (!authed || reply.sent || reply.statusCode >= 400) {
-        return;
+        return reply;
       }
 
       const scopes = request.auth?.scopes ?? [];
@@ -219,6 +219,7 @@ const authPluginImpl: FastifyPluginAsync = async (app) => {
           String(request.id),
           `Missing required scope(s): ${missing.join(', ')}`,
         );
+        return reply;
       }
     };
   });
