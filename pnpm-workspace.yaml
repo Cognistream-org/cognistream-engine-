@@ -1,3 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# pnpm ≥11 reads overrides here (package.json#pnpm is ignored).
+# Keep in sync with package.json#pnpm.overrides for pnpm 9 CI.
+overrides:
+  sharp: ">=0.35.0"
+  postcss: ">=8.5.12"
+  vite: ">=6.3.5"
+  brace-expansion: ">=5.0.9"
+  minimatch: ">=10.2.5"
+  fast-uri: ">=4.1.2"
