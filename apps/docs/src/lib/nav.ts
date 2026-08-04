@@ -24,6 +24,8 @@ export const docsNav: NavItem[] = [
       { title: 'Agents', href: '/api-reference/agents' },
       { title: 'Transactions', href: '/api-reference/transactions' },
       { title: 'Disputes', href: '/api-reference/disputes' },
+      { title: 'Billing', href: '/api-reference/billing' },
+      { title: 'Stripe Connect', href: '/api-reference/stripe-connect' },
       { title: 'Webhooks', href: '/api-reference/webhooks' },
     ],
   },
