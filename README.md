@@ -170,11 +170,129 @@ curl "http://localhost:3001/v1/api-keys?page=1&limit=20" \
 }
 ```
 
+### Create subscription checkout
+
+Requires `write:billing`. Upgrades to Developer or Enterprise via Stripe Checkout.
+
+```bash
+curl -X POST http://localhost:3001/v1/billing/checkout \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: cs_live_..." \
+  -H "X-Idempotency-Key: checkout-001" \
+  -d '{
+    "tier":"developer",
+    "cycle":"monthly",
+    "successUrl":"https://app.example.com/billing/success",
+    "cancelUrl":"https://app.example.com/billing/cancel"
+  }'
+```
+
+```json
+{
+  "url": "https://checkout.stripe.com/c/pay/cs_test_...",
+  "sessionId": "cs_test_..."
+}
+```
+
+### Get usage
+
+Requires `read:billing`. Returns meters for the current billing period (`YYYY-MM`).
+
+```bash
+curl http://localhost:3001/v1/billing/usage \
+  -H "X-API-Key: cs_live_..."
+```
+
+```json
+{
+  "orgId": "...",
+  "billingPeriod": "2026-07",
+  "tier": "developer",
+  "meters": {
+    "api_calls": { "usage": 120, "limit": 10000, "hardLimit": 12000 },
+    "transactions": { "usage": 15, "limit": 1000, "hardLimit": 1200 },
+    "transaction_volume_cents": { "usage": 50000, "limit": 50000000, "hardLimit": 60000000 }
+  }
+}
+```
+
+### Connect Stripe account
+
+Requires `write:billing` (Developer/Enterprise). Creates a Stripe Connect Express account for payouts.
+
+```bash
+curl -X POST http://localhost:3001/v1/stripe/connect \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: cs_live_..." \
+  -H "X-Idempotency-Key: connect-001" \
+  -d '{"country":"us"}'
+```
+
+```json
+{
+  "id": "...",
+  "orgId": "...",
+  "stripeAccountId": "acct_...",
+  "status": "pending",
+  "chargesEnabled": false,
+  "payoutsEnabled": false,
+  "country": "us",
+  "defaultCurrency": "usd"
+}
+```
+
 Error envelope:
 
 ```json
 { "error": { "code": "UNAUTHORIZED", "message": "Missing or invalid API key", "requestId": "..." } }
 ```
+
+## Billing & Pricing
+
+Organizations start on **Free** and can upgrade via Stripe Checkout.
+
+| Tier | Monthly | Yearly | Platform fee | Soft limit | Hard limit |
+|------|---------|--------|--------------|------------|------------|
+| Free | $0 | $0 | 3.50% (350 bp) | 80% of quota | 100% of quota |
+| Developer | $49 | $490 | 2.50% (250 bp) | 80% of quota | 120% of quota |
+| Enterprise | $299 | $2,990 | 1.50% (150 bp) | 80% of quota | 120% of quota |
+
+**Usage limits (selected):**
+
+| Meter | Free | Developer | Enterprise |
+|-------|------|-----------|------------|
+| API calls / mo | 1,000 | 10,000 | 100,000 |
+| Transactions / mo | 100 | 1,000 | 10,000 |
+| Volume / mo | $50,000 | $500,000 | $5,000,000 |
+| Agents | 3 | 10 | 100 |
+
+Platform fees are calculated in **integer cents** (basis points, HALF_UP) and recorded in an immutable `PlatformFeeLedger`. Soft warnings fire at 80%; Free blocks at 100%, paid tiers allow 20% overage headroom before hard block.
+
+Scopes: `read:billing`, `write:billing`.
+
+## Stripe Connect
+
+Seller organizations on Developer/Enterprise can link a Stripe Connect Express account to receive payouts after escrow release:
+
+1. `POST /v1/stripe/connect` — create account (`country` ISO-2)
+2. `POST /v1/stripe/connect/onboarding` — Account Link for KYC (`returnUrl`, `refreshUrl`)
+3. Stripe fires `account.updated` → CogniStream syncs `chargesEnabled` / `payoutsEnabled`
+4. Platform fee transfers settle to the Connect account when payouts are enabled
+
+`GET /v1/stripe/connect` returns status; `DELETE /v1/stripe/connect` disconnects.
+
+## Webhooks
+
+`POST /v1/webhooks/stripe` is **unauthenticated**. Stripe authenticity is verified with the `Stripe-Signature` header. Deliveries are idempotent (Redis) so retries are safe.
+
+Handled event types:
+
+- `account.updated` — sync Connect account capabilities
+- `customer.subscription.created` / `.updated` / `.deleted` — subscription lifecycle
+- `invoice.created` / `.paid` / `.payment_failed` — invoice upsert
+- `transfer.created` / transfer failure — platform fee ledger transfer status
+
+Configure the endpoint in the Stripe Dashboard to point at your API host `/v1/webhooks/stripe`.
 
 ## Scripts
 
