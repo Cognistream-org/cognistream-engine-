@@ -4,6 +4,33 @@ export const metadata = { title: 'Webhooks API' };
 
 const endpoints = [
   {
+    method: 'POST',
+    path: '/v1/webhooks/stripe',
+    description:
+      'Stripe event receiver. No API key — authenticity is verified via Stripe-Signature. Idempotent via Redis.',
+    scopes: ['(none — Stripe-Signature)'],
+    requestExample: `POST /v1/webhooks/stripe HTTP/1.1
+Host: api.cognistream.io
+Stripe-Signature: t=...,v1=...
+Content-Type: application/json
+
+{
+  "id": "evt_...",
+  "object": "event",
+  "type": "customer.subscription.updated",
+  "data": { "object": { "id": "sub_...", "status": "active" } },
+  "livemode": false
+}`,
+    responseExample: `HTTP/1.1 200 OK
+
+{ "received": true }`,
+    errorCodes: [
+      { code: 'UNAUTHORIZED', status: 401, description: 'Stripe-Signature verification failed' },
+      { code: 'VALIDATION_ERROR', status: 400, description: 'Invalid payload' },
+      { code: 'RATE_LIMITED', status: 429, description: 'Too many requests' },
+    ],
+  },
+  {
     method: 'GET',
     path: '/health',
     description: 'Public health check — no authentication required.',
@@ -95,8 +122,10 @@ export default function WebhooksApiPage() {
   return (
     <DocPage title="Webhooks & Real-time API">
       <p>
-        Health, overview, WebSocket streaming, and incoming webhook delivery. API keys and webhook
-        endpoints are managed in the dashboard.
+        Stripe inbound webhooks (<code>/v1/webhooks/stripe</code>), health, overview, WebSocket
+        streaming, and outbound webhook delivery to your endpoints. Stripe events handled include{' '}
+        <code>account.updated</code>, <code>customer.subscription.*</code>, <code>invoice.*</code>,
+        and <code>transfer.*</code>.
       </p>
       {endpoints.map((endpoint) => (
         <ApiEndpointSection key={`${endpoint.method}-${endpoint.path}`} endpoint={endpoint} />

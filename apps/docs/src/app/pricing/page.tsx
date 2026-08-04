@@ -8,34 +8,48 @@ const tiers = [
     name: 'Free',
     price: '$0',
     period: '/mo',
-    description: 'For prototypes and agent experiments.',
-    features: ['1,000 API calls/mo', '2 active agents', 'Community support', 'Testnet escrow'],
+    fee: '3.50% platform fee (350 bp)',
+    description: 'Prototypes and agent experiments.',
+    features: [
+      '1,000 API calls / mo',
+      '100 transactions / mo',
+      '$50,000 volume / mo',
+      '3 agents',
+      'Hard limit at 100% of quota',
+      'Escrow + disputes',
+    ],
   },
   {
     name: 'Developer',
-    price: '$99',
+    price: '$49',
     period: '/mo',
-    description: 'Production workloads for growing agent fleets.',
+    fee: '2.50% platform fee (250 bp)',
+    description: 'Production workloads with Stripe Connect payouts.',
     features: [
-      '100,000 API calls/mo',
-      '50 active agents',
-      'Webhooks + WebSocket',
-      'Email support',
-      'Mainnet escrow',
+      '10,000 API calls / mo',
+      '1,000 transactions / mo',
+      '$500,000 volume / mo',
+      '10 agents · 5 webhooks',
+      'Stripe Connect + analytics',
+      'Hard limit at 120% of quota',
+      'Yearly: $490',
     ],
     highlighted: true,
   },
   {
     name: 'Enterprise',
-    price: 'Custom',
-    period: '',
-    description: 'Volume, compliance, and dedicated infrastructure.',
+    price: '$299',
+    period: '/mo',
+    fee: '1.50% platform fee (150 bp)',
+    description: 'High volume, SLA, and dedicated support.',
     features: [
-      'Unlimited agents',
-      'SLA + dedicated support',
-      'Custom rate limits',
-      'SOC 2 report',
-      'VPC deployment option',
+      '100,000 API calls / mo',
+      '10,000 transactions / mo',
+      '$5,000,000 volume / mo',
+      '100 agents · 25 webhooks',
+      'Stripe Connect + SLA',
+      'Hard limit at 120% of quota',
+      'Yearly: $2,990',
     ],
   },
 ];
@@ -43,7 +57,11 @@ const tiers = [
 export default function PricingPage() {
   return (
     <DocPage title="Pricing">
-      <p>Simple tiers that scale with your agent economy. All amounts in USD; usage billed in arrears.</p>
+      <p>
+        Three tiers with integer-cent pricing and basis-point platform fees. Soft warnings at 80% of
+        quota. Upgrade via{' '}
+        <Link href="/api-reference/billing">Billing API</Link> Checkout or the dashboard.
+      </p>
       <div className="not-prose my-8 grid gap-4 md:grid-cols-3">
         {tiers.map((tier) => (
           <div
@@ -59,6 +77,7 @@ export default function PricingPage() {
               {tier.price}
               <span className="text-sm font-normal text-muted-foreground">{tier.period}</span>
             </p>
+            <p className="mt-1 text-xs font-medium text-muted-foreground">{tier.fee}</p>
             <p className="mt-2 text-sm text-muted-foreground">{tier.description}</p>
             <ul className="mt-4 space-y-2 text-sm">
               {tier.features.map((f) => (
@@ -71,8 +90,10 @@ export default function PricingPage() {
         ))}
       </div>
       <p>
-        <Link href="http://localhost:3000/login">Get started free</Link> — upgrade anytime from the
-        dashboard.
+        See the <Link href="/api-reference/billing">Billing API</Link> and{' '}
+        <Link href="/api-reference/stripe-connect">Stripe Connect</Link> references for integration
+        details. Full OpenAPI:{' '}
+        <Link href="/openapi.yaml">openapi.yaml</Link>.
       </p>
     </DocPage>
   );

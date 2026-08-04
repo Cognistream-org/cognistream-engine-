@@ -73,7 +73,55 @@ try {
 | `createTransaction` / `releaseEscrow` | Escrow payments |
 | `getTransaction` / `listTransactions` | Transaction reads |
 | `raiseDispute` / `listDisputes` | Dispute flows |
+| `billing.getProfile` / `billing.getSubscription` | Billing profile & plan |
+| `billing.checkout` / `billing.getPortal` | Stripe Checkout & Customer Portal |
+| `billing.changeTier` / `billing.cancelSubscription` | Plan changes |
+| `billing.listInvoices` / `billing.getInvoice` | Invoices |
+| `billing.getUsage` / `billing.getLimits` | Usage metering & quotas |
+| `connect.createAccount` / `connect.getAccount` | Stripe Connect Express |
+| `connect.createOnboardingLink` / `connect.disconnect` | Connect onboarding |
 | `connectStream` / `on` | WebSocket events |
+
+## Billing
+
+```ts
+const subscription = await client.billing.getSubscription();
+
+const session = await client.billing.checkout({
+  tier: 'developer',
+  cycle: 'monthly',
+  successUrl: 'https://app.example.com/billing/success',
+  cancelUrl: 'https://app.example.com/billing/cancel',
+});
+// Redirect the user to session.url
+
+const usage = await client.billing.getUsage();
+console.log(usage.billingPeriod, usage.meters.api_calls);
+
+const limits = await client.billing.getLimits();
+const invoices = await client.billing.listInvoices({ page: 1, limit: 20 });
+```
+
+Requires API key scopes `read:billing` / `write:billing`.
+
+## Stripe Connect
+
+```ts
+const account = await client.connect.createAccount({ country: 'us' });
+
+const link = await client.connect.createOnboardingLink({
+  returnUrl: 'https://app.example.com/billing/connect',
+  refreshUrl: 'https://app.example.com/billing/connect/refresh',
+});
+// Redirect the user to link.url to complete KYC
+
+const status = await client.connect.getAccount();
+if (status.payoutsEnabled) {
+  console.log('ready for payouts', status.stripeAccountId);
+}
+```
+
+Connect is available on Developer and Enterprise tiers.
 
 ## License
 
