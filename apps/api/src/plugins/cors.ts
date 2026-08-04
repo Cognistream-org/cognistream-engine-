@@ -25,9 +25,9 @@ const corsPluginImpl: FastifyPluginAsync<CorsPluginOptions> = async (app, opts) 
 
   await app.register(cors, {
     origin(origin, callback) {
-      // Non-browser clients (curl, Stripe webhooks, server SDKs) omit Origin.
+      // Non-browser clients omit Origin — disable CORS headers (do not reflect).
       if (!origin) {
-        callback(null, true);
+        callback(null, false);
         return;
       }
       callback(null, allowed.has(origin));

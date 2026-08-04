@@ -22,7 +22,11 @@ export function parseOrReply<S extends ZodTypeAny>(
   return parsed.data as z.infer<S>;
 }
 
-export function unauthorized(reply: FastifyReply, requestId: string, message = 'Missing or invalid API key'): void {
+export function unauthorized(
+  reply: FastifyReply,
+  requestId: string,
+  message = 'Missing or invalid API key',
+): void {
   void reply.status(401).send(errorBody('UNAUTHORIZED', message, requestId));
 }
 

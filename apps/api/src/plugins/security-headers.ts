@@ -15,6 +15,9 @@ const securityHeadersPluginImpl: FastifyPluginAsync<SecurityHeadersOptions> = as
   opts,
 ) => {
   app.addHook('onSend', async (_request, reply, payload) => {
+    if (reply.raw.headersSent) {
+      return payload;
+    }
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('X-XSS-Protection', '1; mode=block');
