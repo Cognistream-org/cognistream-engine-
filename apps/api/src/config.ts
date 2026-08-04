@@ -11,6 +11,32 @@ const csvList = z
       .filter(Boolean),
   );
 
+const DEFAULT_CORS_ORIGINS_DEV = [
+  'http://localhost:3000',
+  'http://localhost:3002',
+] as const;
+
+const DEFAULT_CORS_ORIGINS_PRODUCTION = [
+  'https://cognistream.io',
+  'https://dashboard.cognistream.io',
+] as const;
+
+function parseCorsOrigins(
+  raw: string | undefined,
+  nodeEnv: 'development' | 'test' | 'production',
+): string[] {
+  if (raw && raw.trim().length > 0) {
+    return raw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  if (nodeEnv === 'production') {
+    return [...DEFAULT_CORS_ORIGINS_PRODUCTION];
+  }
+  return [...DEFAULT_CORS_ORIGINS_DEV];
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z
@@ -28,6 +54,8 @@ const envSchema = z.object({
   OTEL_SERVICE_NAME: z.string().default('cognistream-api'),
   /** OTLP HTTP traces endpoint (Jaeger all-in-one listens on 4318). */
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
+  /** Comma-separated browser origins allowed by CORS. */
+  CORS_ORIGINS: z.string().optional(),
   /** Comma-separated IPs/CIDRs allowed to scrape /metrics. */
   METRICS_IP_ALLOWLIST: csvList,
   /** Semver shown on health endpoints. */
@@ -44,7 +72,8 @@ const envSchema = z.object({
   TRIAL_DAYS: z.coerce.number().int().min(0).default(14),
 });
 
-export type Env = z.infer<typeof envSchema> & {
+export type Env = Omit<z.infer<typeof envSchema>, 'CORS_ORIGINS'> & {
+  CORS_ORIGINS: string[];
   ENCRYPTION_KEYS: string;
   AUDIT_HMAC_KEY: string;
   STRIPE_SECRET_KEY: string;
@@ -116,6 +145,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
 
   return {
     ...data,
+    CORS_ORIGINS: parseCorsOrigins(data.CORS_ORIGINS, data.NODE_ENV),
     ENCRYPTION_KEYS: encryptionKeys,
     AUDIT_HMAC_KEY: auditHmacKey,
     STRIPE_SECRET_KEY: stripeSecretKey,

@@ -4,6 +4,7 @@ import type Stripe from 'stripe';
 import type { Prisma } from '@prisma/client';
 import { errorBody } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
+import { enforceStripeWebhookIpLimit } from '../lib/rate-limit.js';
 import { getStripeClient } from '../lib/stripe.js';
 import { createId } from '../lib/uuid.js';
 import { getCircuitBreaker } from '../resilience/circuit-breaker.js';
@@ -410,6 +411,16 @@ const stripeWebhookRoutesImpl: FastifyPluginAsync<{
 
   app.post('/webhooks/stripe', async (request, reply) => {
     const requestId = String(request.id);
+
+    const withinLimit = await enforceStripeWebhookIpLimit({
+      redis: app.redis,
+      request,
+      reply,
+    });
+    if (!withinLimit) {
+      return;
+    }
+
     const signature = request.headers['stripe-signature'];
     if (typeof signature !== 'string' || signature.length === 0) {
       return reply

@@ -77,6 +77,45 @@ describe('loadEnv', () => {
     expect(env.METRICS_IP_ALLOWLIST).toEqual(['10.0.0.1', '10.0.0.2']);
   });
 
+  it('defaults CORS_ORIGINS for development/test', () => {
+    const env = loadEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      REDIS_URL: 'redis://localhost:6379',
+    });
+    expect(env.CORS_ORIGINS).toEqual([
+      'http://localhost:3000',
+      'http://localhost:3002',
+    ]);
+  });
+
+  it('defaults CORS_ORIGINS for production when unset', () => {
+    const env = loadEnv({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      REDIS_URL: 'redis://localhost:6379',
+      ENCRYPTION_KEYS: `v1:${Buffer.alloc(32, 3).toString('base64')}`,
+      AUDIT_HMAC_KEY: Buffer.alloc(32, 4).toString('base64'),
+      STRIPE_SECRET_KEY: 'sk_test',
+      STRIPE_WEBHOOK_SECRET: 'whsec_test',
+      STRIPE_PUBLISHABLE_KEY: 'pk_test',
+    });
+    expect(env.CORS_ORIGINS).toEqual([
+      'https://cognistream.io',
+      'https://dashboard.cognistream.io',
+    ]);
+  });
+
+  it('parses explicit CORS_ORIGINS', () => {
+    const env = loadEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      REDIS_URL: 'redis://localhost:6379',
+      CORS_ORIGINS: ' https://app.example ,http://localhost:3000 ',
+    });
+    expect(env.CORS_ORIGINS).toEqual(['https://app.example', 'http://localhost:3000']);
+  });
+
   it('requires ENCRYPTION_KEYS in development', () => {
     expect(() =>
       loadEnv({
